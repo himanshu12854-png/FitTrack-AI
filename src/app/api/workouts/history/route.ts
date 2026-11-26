@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import mongoose from 'mongoose';
 import { requireAuth } from '@/lib/auth-utils';
 import { connectDB } from '@/lib/db';
 import WorkoutSession from '@/models/WorkoutSession';
@@ -14,41 +15,42 @@ export async function GET(req: Request) {
 
     await connectDB();
 
-    // 1. Recent completed workout sessions
-    const recentSessions = await WorkoutSession.find({
-      userId: user.id,
-    })
-      .sort({ date: -1 })
-      .limit(20)
-      .lean();
-
-    // 2. Personal records summary
-    const prs = await ExerciseHistory.aggregate([
-      { $match: { userId: user.id } },
-      { $sort: { bestWeight: -1 } },
-      {
-        $group: {
-          _id: '$exerciseName',
-          maxWeight: { $max: '$bestWeight' },
-          date: { $first: '$date' },
-          bestReps: { $first: '$bestReps' },
-        },
-      },
-      { $sort: { maxWeight: -1 } },
-      { $limit: 10 },
-    ]);
-
-    // 3. Exercise specific progression data if requested
-    let progressionData: any[] = [];
-    if (exercise) {
-      progressionData = await ExerciseHistory.find({
+    const [recentSessions, prs, progressionData] = await Promise.all([
+      // 1. Recent completed workout sessions
+      WorkoutSession.find({
         userId: user.id,
-        exerciseName: { $regex: new RegExp(`^${exercise}$`, 'i') },
       })
-        .sort({ date: 1 })
-        .limit(30)
-        .lean();
-    }
+        .sort({ date: -1 })
+        .limit(20)
+        .lean(),
+
+      // 2. Personal records summary
+      ExerciseHistory.aggregate([
+        { $match: { userId: new mongoose.Types.ObjectId(user.id) } },
+        { $sort: { bestWeight: -1 } },
+        {
+          $group: {
+            _id: '$exerciseName',
+            maxWeight: { $max: '$bestWeight' },
+            date: { $first: '$date' },
+            bestReps: { $first: '$bestReps' },
+          },
+        },
+        { $sort: { maxWeight: -1 } },
+        { $limit: 10 },
+      ]),
+
+      // 3. Exercise specific progression data if requested
+      exercise
+        ? ExerciseHistory.find({
+            userId: user.id,
+            exerciseName: { $regex: new RegExp(`^${exercise}$`, 'i') },
+          })
+            .sort({ date: 1 })
+            .limit(30)
+            .lean()
+        : Promise.resolve([]),
+    ]);
 
     return NextResponse.json({
       success: true,

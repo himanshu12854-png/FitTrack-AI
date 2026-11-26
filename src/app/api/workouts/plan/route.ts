@@ -15,7 +15,9 @@ export async function GET() {
     const plan = await WorkoutPlan.findOne({
       userId: user.id,
       isActive: true,
-    }).sort({ updatedAt: -1 });
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
 
     return NextResponse.json({
       success: true,

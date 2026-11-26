@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
+import ScrollReveal from '@/components/ui/ScrollReveal';
 import {
   Activity,
   Flame,
@@ -86,7 +87,8 @@ export default function HomePage() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               {/* Feature 1 */}
-              <div className="p-8 rounded-2xl bg-[#fcfcfc] border border-slate-200/80 hover:border-emerald-300 transition-all shadow-xs flex flex-col justify-between">
+              <ScrollReveal delay={0.05}>
+              <div className="h-full p-8 rounded-2xl bg-[#fcfcfc] border border-slate-200/80 hover:border-emerald-300 hover:-translate-y-1 transition-all shadow-xs flex flex-col justify-between">
                 <div>
                   <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold mb-6">
                     <Flame className="w-6 h-6" />
@@ -106,9 +108,11 @@ export default function HomePage() {
                   <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </div>
+              </ScrollReveal>
 
               {/* Feature 2 */}
-              <div className="p-8 rounded-2xl bg-[#fcfcfc] border border-slate-200/80 hover:border-emerald-300 transition-all shadow-xs flex flex-col justify-between">
+              <ScrollReveal delay={0.12}>
+              <div className="h-full p-8 rounded-2xl bg-[#fcfcfc] border border-slate-200/80 hover:border-emerald-300 hover:-translate-y-1 transition-all shadow-xs flex flex-col justify-between">
                 <div>
                   <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold mb-6">
                     <Dumbbell className="w-6 h-6" />
@@ -128,9 +132,11 @@ export default function HomePage() {
                   <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </div>
+              </ScrollReveal>
 
               {/* Feature 3 */}
-              <div className="p-8 rounded-2xl bg-[#fcfcfc] border border-slate-200/80 hover:border-emerald-300 transition-all shadow-xs flex flex-col justify-between">
+              <ScrollReveal delay={0.19}>
+              <div className="h-full p-8 rounded-2xl bg-[#fcfcfc] border border-slate-200/80 hover:border-emerald-300 hover:-translate-y-1 transition-all shadow-xs flex flex-col justify-between">
                 <div>
                   <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold mb-6">
                     <BrainCircuit className="w-6 h-6" />
@@ -150,6 +156,7 @@ export default function HomePage() {
                   <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </div>
+              </ScrollReveal>
             </div>
           </div>
         </section>
@@ -188,17 +195,16 @@ export default function HomePage() {
                   title: 'Iterate with AI Coach',
                   desc: 'Analyze your strength plateau or request personalized routine modifications whenever your goals evolve.',
                 },
-              ].map((item) => (
-                <div
-                  key={item.step}
-                  className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs"
-                >
-                  <span className="text-2xl font-black text-emerald-600/40 block mb-2 font-mono">
-                    {item.step}
-                  </span>
-                  <h3 className="text-base font-bold text-slate-900 mb-2">{item.title}</h3>
-                  <p className="text-xs text-slate-600 leading-relaxed">{item.desc}</p>
-                </div>
+              ].map((item, idx) => (
+                <ScrollReveal key={item.step} delay={idx * 0.08}>
+                  <div className="h-full bg-white p-6 rounded-2xl border border-slate-200/80 hover:border-emerald-200 hover:-translate-y-0.5 transition-all shadow-xs">
+                    <span className="text-2xl font-black text-emerald-600/40 block mb-2 font-mono">
+                      {item.step}
+                    </span>
+                    <h3 className="text-base font-bold text-slate-900 mb-2">{item.title}</h3>
+                    <p className="text-xs text-slate-600 leading-relaxed">{item.desc}</p>
+                  </div>
+                </ScrollReveal>
               ))}
             </div>
           </div>

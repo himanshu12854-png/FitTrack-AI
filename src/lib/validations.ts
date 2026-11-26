@@ -97,6 +97,7 @@ export const fitnessProfileSchema = z.object({
   carbsTarget: z.number().min(0).max(1000).default(250),
   fatsTarget: z.number().min(0).max(500).default(65),
   timezone: z.string().default('UTC'),
+  isOnboarded: z.boolean().optional(),
 });
 
 export const aiChatMessageSchema = z.object({

@@ -114,6 +114,7 @@ const WorkoutPlanSchema = new Schema<IWorkoutPlan>(
 );
 
 WorkoutPlanSchema.index({ userId: 1 });
+WorkoutPlanSchema.index({ userId: 1, isActive: 1 });
 
 const WorkoutPlan: Model<IWorkoutPlan> =
   mongoose.models.WorkoutPlan ||

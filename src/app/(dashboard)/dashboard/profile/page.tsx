@@ -1,20 +1,23 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import {
-  User,
   Save,
-  CheckCircle2,
   RefreshCw,
   Calculator,
   Flame,
   Scale,
-  Sparkles,
+  Activity,
 } from 'lucide-react';
 import { calculateBMR, calculateTDEE, calculateMacroTargets } from '@/lib/utils';
 import { IUserFitnessProfile } from '@/types';
+import { useToast } from '@/components/ui/Toast';
+import { ProfileSkeleton } from '@/components/ui/Skeleton';
+import { getCached, setCached, invalidateCachePrefix } from '@/lib/client-cache';
 
 export default function ProfilePage() {
+  const { toast } = useToast();
   const [profile, setProfile] = useState<Partial<IUserFitnessProfile>>({
     age: 26,
     gender: 'male',
@@ -28,17 +31,26 @@ export default function ProfilePage() {
     fatsTarget: 70,
     timezone: 'UTC',
   });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => {
+    const cached = getCached<Partial<IUserFitnessProfile>>('user-profile', 60000);
+    return !cached;
+  });
   const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
+    const cached = getCached<Partial<IUserFitnessProfile>>('user-profile', 60000);
+    if (cached) {
+      setProfile(cached.data);
+      setLoading(false);
+    }
+
     const fetchProfile = async () => {
       try {
-        setLoading(true);
+        if (!cached) setLoading(true);
         const res = await fetch('/api/user/profile');
         const json = await res.json();
         if (json.success && json.data.profile) {
+          setCached('user-profile', json.data.profile);
           setProfile(json.data.profile);
         }
       } catch {
@@ -49,9 +61,25 @@ export default function ProfilePage() {
     fetchProfile();
   }, []);
 
+  const liveMetrics = useMemo(() => {
+    if (!profile.weight || !profile.height || !profile.age || !profile.gender) {
+      return null;
+    }
+    const bmr = calculateBMR(profile.weight, profile.height, profile.age, profile.gender);
+    const tdee = calculateTDEE(bmr, profile.activityLevel || 'moderate');
+    return {
+      bmr: Math.round(bmr),
+      tdee,
+    };
+  }, [profile.weight, profile.height, profile.age, profile.gender, profile.activityLevel]);
+
   const handleAutoCalculate = () => {
     if (!profile.weight || !profile.height || !profile.age || !profile.gender) {
-      alert('Please fill in your Age, Gender, Height, and Weight first.');
+      toast({
+        title: 'Missing biometrics',
+        description: 'Please fill in your Age, Gender, Height, and Weight first.',
+        variant: 'error',
+      });
       return;
     }
 
@@ -71,6 +99,12 @@ export default function ProfilePage() {
       carbsTarget: macros.carbs,
       fatsTarget: macros.fats,
     });
+
+    toast({
+      title: 'Targets auto-calculated',
+      description: `Personalized to ${targetCalories.toLocaleString()} kcal/day based on your TDEE (${tdee.toLocaleString()} kcal).`,
+      variant: 'success',
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -80,46 +114,51 @@ export default function ProfilePage() {
       const res = await fetch('/api/user/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(profile),
+        body: JSON.stringify({
+          ...profile,
+          isOnboarded: true,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Failed to save profile');
 
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      invalidateCachePrefix('dashboard');
+      invalidateCachePrefix('diet-');
+      toast({
+        title: 'Profile updated',
+        description: 'Your biometrics and daily nutrition targets have been saved.',
+        variant: 'success',
+      });
     } catch (err: any) {
-      alert(err.message || 'Error updating profile');
+      toast({
+        title: 'Update failed',
+        description: err.message || 'Error updating profile',
+        variant: 'error',
+      });
     } finally {
       setSaving(false);
     }
   };
 
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
-        <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin" />
-        <p className="text-sm text-slate-500 font-medium">Loading fitness profile...</p>
-      </div>
-    );
+    return <ProfileSkeleton />;
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-          Fitness Profile & Nutrition Targets
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="max-w-4xl mx-auto space-y-6"
+    >
+      <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs">
+        <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+          Fitness Profile &amp; Nutrition Targets
         </h1>
-        <p className="text-xs text-slate-500 mt-1">
+        <p className="text-xs sm:text-sm text-slate-500 mt-1">
           These biometric parameters configure your daily calorie targets, macronutrient calculations, and AI fitness guidance.
         </p>
       </div>
-
-      {success && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs sm:text-sm font-semibold flex items-center gap-2">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-          <span>Profile and daily targets updated successfully!</span>
-        </div>
-      )}
 
       <form onSubmit={handleSave} className="space-y-6">
         {/* Biometrics */}
@@ -225,15 +264,28 @@ export default function ProfilePage() {
         {/* Nutrition Targets */}
         <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Flame className="w-5 h-5 text-emerald-600" />
-              <span>Daily Calorie & Macronutrient Targets</span>
-            </h2>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Flame className="w-5 h-5 text-emerald-600" />
+                <span>Daily Calorie &amp; Macronutrient Targets</span>
+              </h2>
+              {liveMetrics && (
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-[11px] font-semibold">
+                    <Activity className="w-3 h-3 text-slate-500" />
+                    BMR: {liveMetrics.bmr.toLocaleString()} kcal
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-semibold">
+                    Maintenance TDEE: {liveMetrics.tdee.toLocaleString()} kcal
+                  </span>
+                </div>
+              )}
+            </div>
 
             <button
               type="button"
               onClick={handleAutoCalculate}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 text-xs font-bold hover:bg-emerald-100 transition border border-emerald-200 w-fit"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-800 text-xs font-bold hover:bg-emerald-100 transition border border-emerald-200 w-fit shrink-0"
             >
               <Calculator className="w-3.5 h-3.5 text-emerald-600" />
               <span>Auto-Calculate (TDEE Formula)</span>
@@ -319,6 +371,6 @@ export default function ProfilePage() {
           </button>
         </div>
       </form>
-    </div>
+    </motion.div>
   );
 }

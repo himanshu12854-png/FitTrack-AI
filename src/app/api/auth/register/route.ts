@@ -49,6 +49,7 @@ export async function POST(req: Request) {
       fitnessGoal: 'build_muscle',
       activityLevel: 'moderate',
       timezone: 'UTC',
+      isOnboarded: false,
     });
 
     return NextResponse.json(

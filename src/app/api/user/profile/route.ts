@@ -13,8 +13,8 @@ export async function GET() {
     await connectDB();
 
     const [user, profile] = await Promise.all([
-      User.findById(sessionUser.id).select('name email image createdAt'),
-      UserFitnessProfile.findOne({ userId: sessionUser.id }),
+      User.findById(sessionUser.id).select('name email image createdAt').lean(),
+      UserFitnessProfile.findOne({ userId: sessionUser.id }).lean(),
     ]);
 
     return NextResponse.json({
@@ -46,9 +46,9 @@ export async function PUT(req: Request) {
 
     const profile = await UserFitnessProfile.findOneAndUpdate(
       { userId: sessionUser.id },
-      { $set: validated.data },
+      { $set: { ...validated.data, isOnboarded: validated.data.isOnboarded ?? true } },
       { new: true, upsert: true }
-    );
+    ).lean();
 
     return NextResponse.json({
       success: true,

@@ -15,10 +15,24 @@ export async function GET() {
     const sessionUser = await requireAuth();
     await connectDB();
 
-    const [user, profile, activePlan] = await Promise.all([
-      User.findById(sessionUser.id).select('name email image'),
-      UserFitnessProfile.findOne({ userId: sessionUser.id }),
-      WorkoutPlan.findOne({ userId: sessionUser.id, isActive: true }),
+    const [user, profile, activePlan, recentDietHistory, recentSessions] = await Promise.all([
+      User.findById(sessionUser.id).select('name email image').lean(),
+      UserFitnessProfile.findOne({ userId: sessionUser.id })
+        .select('timezone dailyCalorieTarget proteinTarget carbsTarget fatsTarget fitnessGoal isOnboarded age height weight')
+        .lean(),
+      WorkoutPlan.findOne({ userId: sessionUser.id, isActive: true })
+        .select('name days')
+        .lean(),
+      DietLog.find({ userId: sessionUser.id })
+        .select('date totalCalories totalProtein totalCarbs totalFats')
+        .sort({ date: -1 })
+        .limit(7)
+        .lean(),
+      WorkoutSession.find({ userId: sessionUser.id, isCompleted: true })
+        .select('workoutName date exercises')
+        .sort({ date: -1 })
+        .limit(3)
+        .lean(),
     ]);
 
     const timezone = profile?.timezone || 'UTC';
@@ -27,30 +41,32 @@ export async function GET() {
     const dayOfWeek = getDayName(todayDate);
     const weekStart = getWeekStart(todayDate);
 
-    // Fetch today's diet
-    const rawDiet = await DietLog.findOne({
-      userId: sessionUser.id,
-      date: todayStr,
-    });
-
-    const todayDiet = rawDiet || ({
-      totalCalories: 0,
-      totalProtein: 0,
-      totalCarbs: 0,
-      totalFats: 0,
-      meals: { breakfast: [], lunch: [], dinner: [], snacks: [] },
-    } as any);
-
-    // Fetch today's workout session
     const startOfDay = new Date(todayStr);
     startOfDay.setUTCHours(0, 0, 0, 0);
     const endOfDay = new Date(todayStr);
     endOfDay.setUTCHours(23, 59, 59, 999);
 
-    const todaySession = await WorkoutSession.findOne({
-      userId: sessionUser.id,
-      date: { $gte: startOfDay, $lte: endOfDay },
-    });
+    const [todaySession, weeklyCompletedCount] = await Promise.all([
+      WorkoutSession.findOne({
+        userId: sessionUser.id,
+        date: { $gte: startOfDay, $lte: endOfDay },
+      })
+        .select('workoutName isCompleted')
+        .lean(),
+      WorkoutSession.countDocuments({
+        userId: sessionUser.id,
+        weekStart,
+        isCompleted: true,
+      }),
+    ]);
+
+    const rawDiet = recentDietHistory.find((d: any) => d.date === todayStr);
+    const todayDiet = rawDiet || {
+      totalCalories: 0,
+      totalProtein: 0,
+      totalCarbs: 0,
+      totalFats: 0,
+    };
 
     // Check scheduled workout in active plan for today
     let todayScheduledWorkout = null;
@@ -63,35 +79,13 @@ export async function GET() {
       }
     }
 
-    // Weekly completed workouts
-    const weeklyCompletedCount = await WorkoutSession.countDocuments({
-      userId: sessionUser.id,
-      weekStart,
-      isCompleted: true,
-    });
-
     // Target workouts per week
     const weeklyTargetCount = activePlan
       ? activePlan.days.filter((d: any) => !d.isRestDay).length
       : 4;
 
-    // Last 7 days calories history
-    const recentDietHistory = await DietLog.find({ userId: sessionUser.id })
-      .sort({ date: -1 })
-      .limit(7)
-      .lean();
-
-    // Recent activity feed
-    const [recentSessions, recentFoods] = await Promise.all([
-      WorkoutSession.find({ userId: sessionUser.id, isCompleted: true })
-        .sort({ date: -1 })
-        .limit(3)
-        .lean(),
-      DietLog.find({ userId: sessionUser.id, totalCalories: { $gt: 0 } })
-        .sort({ date: -1 })
-        .limit(3)
-        .lean(),
-    ]);
+    // Derive recent foods from recentDietHistory instead of an extra DB query
+    const recentFoods = recentDietHistory.filter((d: any) => d.totalCalories > 0).slice(0, 3);
 
     const recentActivity: Array<{
       id: string;
@@ -126,6 +120,10 @@ export async function GET() {
     const calorieTarget = profile?.dailyCalorieTarget || 2000;
     const consumedCalories = todayDiet.totalCalories || 0;
     const remainingCalories = Math.max(0, calorieTarget - consumedCalories);
+    const isOnboarded =
+      profile?.isOnboarded === true ||
+      (profile?.isOnboarded !== false &&
+        Boolean(profile?.age && profile?.height && profile?.weight));
 
     return NextResponse.json({
       success: true,
@@ -134,6 +132,7 @@ export async function GET() {
           name: user?.name || 'Athlete',
           email: user?.email || '',
         },
+        isOnboarded,
         fitnessGoal: profile?.fitnessGoal || 'build_muscle',
         calories: {
           consumed: consumedCalories,

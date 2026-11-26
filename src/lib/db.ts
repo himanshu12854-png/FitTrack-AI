@@ -34,6 +34,8 @@ export async function connectDB() {
       // hanging while MongoDB Atlas is unreachable.
       serverSelectionTimeoutMS: 10_000,
       connectTimeoutMS: 10_000,
+      maxPoolSize: 10,
+      socketTimeoutMS: 20_000,
     };
     cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
       return mongoose;

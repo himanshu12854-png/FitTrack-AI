@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { IWorkoutPlan, IWorkoutDay, IExercise } from '@/types';
+import { getCached, setCached } from '@/lib/client-cache';
 
 const PRESET_SPLITS = [
   {
@@ -137,31 +138,38 @@ const PRESET_SPLITS = [
 const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 export default function WorkoutPlannerPage() {
-  const [plan, setPlan] = useState<Partial<IWorkoutPlan> | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [plan, setPlan] = useState<Partial<IWorkoutPlan> | null>(() => {
+    const cached = getCached<Partial<IWorkoutPlan>>('workout-plan', 60000);
+    return cached ? cached.data : null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    const cached = getCached<Partial<IWorkoutPlan>>('workout-plan', 60000);
+    return !cached;
+  });
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  const fetchActivePlan = async () => {
+  const fetchActivePlan = async (hasCache = false) => {
     try {
-      setLoading(true);
+      if (!hasCache) setLoading(true);
       const res = await fetch('/api/workouts/plan');
       const json = await res.json();
       if (json.success && json.data) {
+        setCached('workout-plan', json.data);
         setPlan(json.data);
       } else {
-        // Default to the 4-day split preset if no plan exists
         setPlan(PRESET_SPLITS[0]);
       }
     } catch {
-      setPlan(PRESET_SPLITS[0]);
+      if (!hasCache) setPlan(PRESET_SPLITS[0]);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchActivePlan();
+    const cached = getCached<Partial<IWorkoutPlan>>('workout-plan', 60000);
+    fetchActivePlan(Boolean(cached));
   }, []);
 
   const handleApplyPreset = (preset: typeof PRESET_SPLITS[0]) => {

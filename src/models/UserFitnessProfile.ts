@@ -23,6 +23,7 @@ export interface IUserFitnessProfile extends Document {
   carbsTarget: number;
   fatsTarget: number;
   timezone: string;
+  isOnboarded: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -75,6 +76,10 @@ const UserFitnessProfileSchema = new Schema<IUserFitnessProfile>(
     timezone: {
       type: String,
       default: 'UTC',
+    },
+    isOnboarded: {
+      type: Boolean,
+      default: false,
     },
   },
   {

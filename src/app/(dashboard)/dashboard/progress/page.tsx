@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import {
   TrendingUp,
   Award,
@@ -11,16 +12,18 @@ import {
   Clock,
   Zap,
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from 'recharts';
 import { formatDate } from '@/lib/utils';
+import { getCached, setCached } from '@/lib/client-cache';
+
+const ExerciseProgressChart = dynamic(
+  () => import('@/components/charts/ExerciseProgressChart'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-72 w-full rounded-xl bg-slate-100 animate-pulse" />
+    ),
+  }
+);
 
 interface HistoryResponse {
   recentSessions: any[];
@@ -38,16 +41,23 @@ interface HistoryResponse {
 }
 
 export default function ProgressPage() {
-  const [data, setData] = useState<HistoryResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [selectedExercise, setSelectedExercise] = useState('Barbell Bench Press');
+  const [data, setData] = useState<HistoryResponse | null>(() => {
+    const cached = getCached<HistoryResponse>('workout-history-Barbell Bench Press', 60000);
+    return cached ? cached.data : null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    const cached = getCached<HistoryResponse>('workout-history-Barbell Bench Press', 60000);
+    return !cached;
+  });
 
-  const fetchHistory = async (exerciseName: string) => {
+  const fetchHistory = async (exerciseName: string, hasCache = false) => {
     try {
-      setLoading(true);
+      if (!hasCache) setLoading(true);
       const res = await fetch(`/api/workouts/history?exercise=${encodeURIComponent(exerciseName)}`);
       const json = await res.json();
       if (json.success) {
+        setCached(`workout-history-${exerciseName}`, json.data);
         setData(json.data);
       }
     } catch {
@@ -57,7 +67,14 @@ export default function ProgressPage() {
   };
 
   useEffect(() => {
-    fetchHistory(selectedExercise);
+    const cached = getCached<HistoryResponse>(`workout-history-${selectedExercise}`, 60000);
+    if (cached) {
+      setData(cached.data);
+      setLoading(false);
+      fetchHistory(selectedExercise, true);
+    } else {
+      fetchHistory(selectedExercise, false);
+    }
   }, [selectedExercise]);
 
   if (loading && !data) {
@@ -109,35 +126,7 @@ export default function ProgressPage() {
 
         <div className="h-72 w-full">
           {data?.progressionData && data.progressionData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data.progressionData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis
-                  dataKey="date"
-                  tickFormatter={(val) => formatDate(val)}
-                  stroke="#94a3b8"
-                  fontSize={11}
-                />
-                <YAxis stroke="#94a3b8" fontSize={11} unit="kg" />
-                <Tooltip
-                  formatter={(val: any) => [`${val} kg`, 'Max Weight']}
-                  labelFormatter={(lbl) => formatDate(String(lbl || ''))}
-                  contentStyle={{
-                    backgroundColor: '#ffffff',
-                    borderRadius: '8px',
-                    border: '1px solid #e2e8f0',
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="bestWeight"
-                  stroke="#16a34a"
-                  strokeWidth={3}
-                  dot={{ r: 4, fill: '#16a34a' }}
-                  activeDot={{ r: 6 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <ExerciseProgressChart data={data.progressionData} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 text-center">
               <TrendingUp className="w-8 h-8 mb-2 text-slate-300" />

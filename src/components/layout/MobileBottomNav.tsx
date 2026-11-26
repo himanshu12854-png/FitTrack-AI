@@ -23,7 +23,7 @@ export default function MobileBottomNav() {
 
   return (
     <nav
-      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-lg px-2 py-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      className="lg:hidden fixed bottom-4 inset-x-3 z-40 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-xl px-2 py-1.5"
       aria-label="Mobile Bottom Navigation"
     >
       <div className="flex items-center justify-around max-w-md mx-auto">

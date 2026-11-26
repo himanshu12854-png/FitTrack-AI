@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import {
   Dumbbell,
   CheckCircle2,
@@ -18,13 +19,24 @@ import {
 } from 'lucide-react';
 import { getTodayDate, formatDate } from '@/lib/utils';
 import { IWorkoutSession, ISessionExercise, ISetRecord } from '@/types';
+import { useToast } from '@/components/ui/Toast';
+import { useMilestone } from '@/components/ui/MilestoneCelebration';
+import { invalidateCachePrefix, getCached, setCached } from '@/lib/client-cache';
 
 export default function WorkoutSessionPage() {
-  const [session, setSession] = useState<IWorkoutSession | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
+  const { celebrate } = useMilestone();
+  const [currentDate, setCurrentDate] = useState<string>(getTodayDate());
+  const [session, setSession] = useState<IWorkoutSession | null>(() => {
+    const cached = getCached<IWorkoutSession | null>(`workout-session-${getTodayDate()}`, 60000);
+    return cached ? cached.data : null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    const cached = getCached<IWorkoutSession | null>(`workout-session-${getTodayDate()}`, 60000);
+    return !cached;
+  });
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
-  const [currentDate, setCurrentDate] = useState<string>(getTodayDate());
 
   // Rest Timer State
   const [timerSeconds, setTimerSeconds] = useState(0);
@@ -47,14 +59,15 @@ export default function WorkoutSessionPage() {
     setIsTimerRunning(true);
   };
 
-  const fetchSession = async (date: string) => {
+  const fetchSession = async (date: string, hasCache = false) => {
     try {
-      setLoading(true);
+      if (!hasCache) setLoading(true);
       const res = await fetch(`/api/workouts/session?date=${date}`);
       const json = await res.json();
-      if (json.success && json.data) {
-        setSession(json.data);
-      } else {
+      if (json.success) {
+        setCached(`workout-session-${date}`, json.data ?? null);
+        setSession(json.data ?? null);
+      } else if (!hasCache) {
         setSession(null);
       }
     } catch {
@@ -64,7 +77,14 @@ export default function WorkoutSessionPage() {
   };
 
   useEffect(() => {
-    fetchSession(currentDate);
+    const cached = getCached<IWorkoutSession | null>(`workout-session-${currentDate}`, 60000);
+    if (cached) {
+      setSession(cached.data);
+      setLoading(false);
+      fetchSession(currentDate, true);
+    } else {
+      fetchSession(currentDate, false);
+    }
   }, [currentDate]);
 
   const handleToggleSetComplete = (exIndex: number, setIndex: number) => {
@@ -78,9 +98,44 @@ export default function WorkoutSessionPage() {
     const allSetsCompleted = updatedExercises[exIndex].sets.every((s) => s.isCompleted);
     updatedExercises[exIndex].isCompleted = allSetsCompleted;
 
-    // Trigger rest timer if set was completed
+    // Trigger rest timer & milestone if set was completed
     if (!wasCompleted) {
       startRestTimer(60);
+
+      const totalSets = updatedExercises.reduce((acc, ex) => acc + ex.sets.length, 0);
+      const doneSets = updatedExercises.reduce(
+        (acc, ex) => acc + ex.sets.filter((s) => s.isCompleted).length,
+        0
+      );
+      const pct = totalSets > 0 ? Math.round((doneSets / totalSets) * 100) : 0;
+
+      if (pct === 100) {
+        celebrate({
+          id: `workout-all-sets-${currentDate}`,
+          badge: '100% Sets Complete',
+          title: 'All Sets Crushed!',
+          subtitle: `Every set in ${session.workoutName} is done. Hit "Finish Workout" to lock in your PRs!`,
+          progressPercent: 100,
+          icon: 'trophy',
+        });
+      } else if (allSetsCompleted) {
+        celebrate({
+          badge: 'Exercise Complete',
+          title: `${updatedExercises[exIndex].exerciseName} Done!`,
+          subtitle: `${doneSets} of ${totalSets} total sets finished today. Keep the momentum going!`,
+          progressPercent: pct,
+          icon: 'dumbbell',
+        });
+      } else if (pct >= 50) {
+        celebrate({
+          id: `workout-50-${currentDate}`,
+          badge: 'Halfway Milestone',
+          title: '50% of Workout Complete!',
+          subtitle: `You're halfway through ${session.workoutName}. Stay locked in!`,
+          progressPercent: pct,
+          icon: 'flame',
+        });
+      }
     }
 
     setSession({ ...session, exercises: updatedExercises });
@@ -135,10 +190,32 @@ export default function WorkoutSessionPage() {
       if (!res.ok) throw new Error(json.error || 'Failed to save workout session');
 
       setSession(json.data);
+      invalidateCachePrefix('dashboard');
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
+
+      if (markComplete) {
+        celebrate({
+          id: `workout-finished-${currentDate}`,
+          badge: 'Workout Complete',
+          title: `${session.workoutName} Completed!`,
+          subtitle: 'Session logged and personal records updated. Great work today!',
+          progressPercent: 100,
+          icon: 'trophy',
+        });
+      } else {
+        toast({
+          title: 'Progress saved',
+          description: 'Your workout sets have been saved.',
+          variant: 'success',
+        });
+      }
     } catch (err: any) {
-      alert(err.message || 'Error saving session');
+      toast({
+        title: 'Error saving session',
+        description: err.message || 'Could not save workout session.',
+        variant: 'error',
+      });
     } finally {
       setSaving(false);
     }
@@ -360,8 +437,11 @@ export default function WorkoutSessionPage() {
                         />
                       </td>
                       <td className="py-2.5 text-center">
-                        <button
+                        <motion.button
                           type="button"
+                          whileTap={{ scale: 0.82 }}
+                          animate={{ scale: set.isCompleted ? [1, 1.18, 1] : 1 }}
+                          transition={{ duration: 0.25 }}
                           onClick={() => handleToggleSetComplete(exIndex, setIndex)}
                           className={`w-7 h-7 rounded-lg flex items-center justify-center mx-auto transition ${
                             set.isCompleted
@@ -370,7 +450,7 @@ export default function WorkoutSessionPage() {
                           }`}
                         >
                           <CheckCircle2 className="w-4 h-4" />
-                        </button>
+                        </motion.button>
                       </td>
                     </tr>
                   ))}

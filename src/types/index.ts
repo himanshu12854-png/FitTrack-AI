@@ -129,6 +129,7 @@ export interface IUserFitnessProfile {
   carbsTarget: number;
   fatsTarget: number;
   timezone: string;
+  isOnboarded?: boolean;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }

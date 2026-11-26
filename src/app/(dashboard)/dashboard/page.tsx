@@ -1,7 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
+import { useRouter } from 'next/navigation';
+import { motion } from 'framer-motion';
 import {
   Flame,
   Dumbbell,
@@ -11,20 +14,26 @@ import {
   TrendingUp,
   Sparkles,
   Plus,
-  RefreshCw,
   AlertCircle,
+  SlidersHorizontal,
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from 'recharts';
+import { getCached, setCached } from '@/lib/client-cache';
+import { prefetchAllDashboardData } from '@/lib/prefetch-data';
+import { DashboardSkeleton } from '@/components/ui/Skeleton';
+import CalorieRing from '@/components/ui/CalorieRing';
+
+const WeeklyCalorieChart = dynamic(
+  () => import('@/components/charts/WeeklyCalorieChart'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-64 w-full rounded-xl bg-slate-100 animate-pulse" />
+    ),
+  }
+);
 
 interface DashboardStats {
+  isOnboarded?: boolean;
   user: { name: string; email: string };
   fitnessGoal: string;
   calories: {
@@ -56,51 +65,85 @@ interface DashboardStats {
   }>;
 }
 
+const cardVariants = {
+  hidden: { opacity: 0, y: 14 },
+  visible: (i: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: i * 0.06,
+      duration: 0.35,
+      ease: 'easeOut' as const,
+    },
+  }),
+};
+
 export default function DashboardPage() {
-  const [data, setData] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+  const [data, setData] = useState<DashboardStats | null>(() => {
+    const cached = getCached<DashboardStats>('dashboard', 30000);
+    return cached ? cached.data : null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    const cached = getCached<DashboardStats>('dashboard', 30000);
+    return !cached;
+  });
   const [error, setError] = useState<string | null>(null);
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = useCallback(async (hasCache = false) => {
     try {
-      setLoading(true);
+      if (!hasCache) setLoading(true);
       setError(null);
       const res = await fetch('/api/dashboard');
       if (!res.ok) throw new Error('Failed to load dashboard data');
       const json = await res.json();
       if (json.success) {
+        if (json.data?.isOnboarded === false) {
+          router.replace('/dashboard/onboarding');
+          return;
+        }
+        setCached('dashboard', json.data);
         setData(json.data);
+        prefetchAllDashboardData();
       } else {
         throw new Error(json.error || 'Failed to parse response');
       }
     } catch (err: any) {
-      setError(err.message);
+      if (!hasCache) {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [router]);
 
   useEffect(() => {
-    fetchDashboard();
-  }, []);
+    const cached = getCached<DashboardStats>('dashboard', 30000);
+    if (cached) {
+      if (cached.data?.isOnboarded === false) {
+        router.replace('/dashboard/onboarding');
+        return;
+      }
+      setData(cached.data);
+      setLoading(false);
+      fetchDashboard(true);
+    } else {
+      fetchDashboard(false);
+    }
+  }, [fetchDashboard, router]);
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
-        <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin" />
-        <p className="text-sm font-medium text-slate-500">Loading your fitness dashboard...</p>
-      </div>
-    );
+  if (loading && !data) {
+    return <DashboardSkeleton />;
   }
 
-  if (error || !data) {
+  if ((error || !data) && !data) {
     return (
       <div className="bg-rose-50 border border-rose-200 rounded-2xl p-8 text-center max-w-lg mx-auto mt-12">
         <AlertCircle className="w-10 h-10 text-rose-500 mx-auto mb-3" />
         <h2 className="text-lg font-bold text-rose-900">Unable to load dashboard</h2>
         <p className="text-sm text-rose-700 mt-1">{error || 'Something went wrong.'}</p>
         <button
-          onClick={fetchDashboard}
+          onClick={() => fetchDashboard(false)}
           className="mt-4 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-medium transition"
         >
           Retry
@@ -109,9 +152,19 @@ export default function DashboardPage() {
     );
   }
 
-  const caloriePercentage = Math.min(
-    100,
-    Math.round((data.calories.consumed / (data.calories.target || 2000)) * 100)
+  if (!data) return null;
+
+  const caloriePercentage = Math.round(
+    (data.calories.consumed / (data.calories.target || 1)) * 100
+  );
+  const proteinPct = Math.round(
+    (data.macros.protein.consumed / (data.macros.protein.target || 1)) * 100
+  );
+  const carbsPct = Math.round(
+    (data.macros.carbs.consumed / (data.macros.carbs.target || 1)) * 100
+  );
+  const fatsPct = Math.round(
+    (data.macros.fats.consumed / (data.macros.fats.target || 1)) * 100
   );
 
   const formatGoal = (goal: string) => {
@@ -130,151 +183,201 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       {/* Welcome & Goal Banner */}
-      <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
+      <motion.div
+        custom={0}
+        initial="hidden"
+        animate="visible"
+        variants={cardVariants}
+        className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+      >
+        <div className="min-w-0">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 text-xs font-semibold border border-emerald-100">
-            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-            Goal: {formatGoal(data.fitnessGoal)}
+            <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="truncate">Goal: {formatGoal(data.fitnessGoal)}</span>
           </span>
-          <h1 className="text-2xl font-bold text-slate-900 mt-2">
+          <h1 className="text-xl sm:text-2xl font-bold text-slate-900 mt-2 tracking-tight">
             Welcome back, {data.user.name}! 👋
           </h1>
-          <p className="text-sm text-slate-500 mt-1">
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Here is your daily nutrition and training summary for today.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full sm:w-auto">
           <Link
             href="/dashboard/workout-session"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition"
+            className="inline-flex flex-1 sm:flex-initial items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold transition"
           >
-            <Dumbbell className="w-4 h-4 text-emerald-400" />
+            <Dumbbell className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>Today&apos;s Workout</span>
           </Link>
           <Link
             href="/dashboard/calories"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition shadow-xs"
+            className="inline-flex flex-1 sm:flex-initial items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold transition shadow-xs"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-4 h-4 shrink-0" />
             <span>Add Meal</span>
           </Link>
         </div>
-      </div>
+      </motion.div>
 
       {/* Primary Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 sm:gap-6">
         {/* Calorie Card */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500">Daily Energy</span>
+        <motion.div
+          custom={1}
+          initial="hidden"
+          animate="visible"
+          variants={cardVariants}
+          className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-700">Daily Energy</span>
+              <Link
+                href="/dashboard/profile"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-semibold transition"
+                title="Adjust Personalized Target"
+              >
+                <SlidersHorizontal className="w-3 h-3" />
+                <span>Personalized</span>
+              </Link>
+            </div>
             <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
-              <Flame className="w-5 h-5" />
+              <Flame className="w-4 h-4" />
             </div>
           </div>
 
-          <div className="my-4">
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-extrabold text-slate-900 tracking-tight">
-                {data.calories.consumed}
-              </span>
-              <span className="text-sm font-medium text-slate-400">
-                / {data.calories.target} kcal
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-1">
-              <strong className="text-emerald-700 font-semibold">{data.calories.remaining} kcal</strong> remaining for today
-            </p>
-
-            {/* Progress bar */}
-            <div className="w-full bg-slate-100 rounded-full h-2.5 mt-3 overflow-hidden">
-              <div
-                className={`h-2.5 rounded-full transition-all duration-500 ${
-                  caloriePercentage > 100 ? 'bg-amber-500' : 'bg-emerald-600'
-                }`}
-                style={{ width: `${caloriePercentage}%` }}
+          <div className="my-4 flex items-center gap-4 sm:gap-5">
+            <div className="shrink-0">
+              <CalorieRing
+                consumed={data.calories.consumed}
+                target={data.calories.target}
+                size={116}
+                strokeWidth={10}
               />
             </div>
+
+            <div className="space-y-2 min-w-0 flex-1">
+              <div>
+                <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider block">
+                  Consumed
+                </span>
+                <span className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
+                  {data.calories.consumed.toLocaleString()} <span className="text-xs font-medium text-slate-400">kcal</span>
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100">
+                <div>
+                  <span className="text-[10px] font-medium text-slate-400 uppercase block">Target</span>
+                  <span className="text-xs font-bold text-slate-700">{data.calories.target.toLocaleString()}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-medium text-slate-400 uppercase block">Remaining</span>
+                  <span className="text-xs font-bold text-emerald-700">{data.calories.remaining.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <Link
-            href="/dashboard/calories"
-            className="inline-flex items-center text-xs font-semibold text-emerald-700 hover:text-emerald-800 gap-1 pt-2 border-t border-slate-100"
-          >
-            <span>View Food Diary</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
-        </div>
+          <div className="flex items-center justify-between pt-2.5 border-t border-slate-100">
+            <Link
+              href="/dashboard/calories"
+              className="inline-flex items-center text-xs font-semibold text-emerald-700 hover:text-emerald-800 gap-1"
+            >
+              <span>View Food Diary</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+            <Link
+              href="/dashboard/profile"
+              className="text-[11px] font-medium text-slate-400 hover:text-slate-700 transition"
+            >
+              Adjust
+            </Link>
+          </div>
+        </motion.div>
 
         {/* Macronutrients Card */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between">
+        <motion.div
+          custom={2}
+          initial="hidden"
+          animate="visible"
+          variants={cardVariants}
+          className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500">Macronutrients</span>
-            <span className="text-xs font-semibold text-slate-400">Consumed / Target</span>
+            <span className="text-sm font-semibold text-slate-700">Macronutrients</span>
+            <span className="text-xs font-medium text-slate-400">Consumed / Target</span>
           </div>
 
-          <div className="my-4 space-y-3">
+          <div className="my-4 space-y-3.5">
             {/* Protein */}
             <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-slate-700 font-semibold">Protein</span>
+              <div className="flex items-center justify-between text-xs font-medium mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-700 font-semibold">Protein</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold">
+                    {proteinPct}%
+                  </span>
+                </div>
                 <span className="text-slate-500">
                   {data.macros.protein.consumed}g / {data.macros.protein.target}g
                 </span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, proteinPct)}%` }}
+                  transition={{ duration: 0.6, ease: 'easeOut' }}
                   className="bg-emerald-600 h-2 rounded-full"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (data.macros.protein.consumed / (data.macros.protein.target || 1)) * 100
-                    )}%`,
-                  }}
                 />
               </div>
             </div>
 
             {/* Carbs */}
             <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-slate-700 font-semibold">Carbs</span>
+              <div className="flex items-center justify-between text-xs font-medium mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-700 font-semibold">Carbs</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 text-[10px] font-bold">
+                    {carbsPct}%
+                  </span>
+                </div>
                 <span className="text-slate-500">
                   {data.macros.carbs.consumed}g / {data.macros.carbs.target}g
                 </span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, carbsPct)}%` }}
+                  transition={{ duration: 0.6, delay: 0.08, ease: 'easeOut' }}
                   className="bg-sky-500 h-2 rounded-full"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (data.macros.carbs.consumed / (data.macros.carbs.target || 1)) * 100
-                    )}%`,
-                  }}
                 />
               </div>
             </div>
 
             {/* Fats */}
             <div>
-              <div className="flex justify-between text-xs font-medium mb-1">
-                <span className="text-slate-700 font-semibold">Fats</span>
+              <div className="flex items-center justify-between text-xs font-medium mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-700 font-semibold">Fats</span>
+                  <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[10px] font-bold">
+                    {fatsPct}%
+                  </span>
+                </div>
                 <span className="text-slate-500">
                   {data.macros.fats.consumed}g / {data.macros.fats.target}g
                 </span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                <div
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, fatsPct)}%` }}
+                  transition={{ duration: 0.6, delay: 0.16, ease: 'easeOut' }}
                   className="bg-amber-500 h-2 rounded-full"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (data.macros.fats.consumed / (data.macros.fats.target || 1)) * 100
-                    )}%`,
-                  }}
                 />
               </div>
             </div>
@@ -282,17 +385,23 @@ export default function DashboardPage() {
 
           <Link
             href="/dashboard/profile"
-            className="inline-flex items-center text-xs font-semibold text-slate-600 hover:text-slate-900 gap-1 pt-2 border-t border-slate-100"
+            className="inline-flex items-center text-xs font-semibold text-slate-600 hover:text-slate-900 gap-1 pt-2.5 border-t border-slate-100"
           >
             <span>Adjust Targets</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
-        </div>
+        </motion.div>
 
         {/* Workout Split Status Card */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between">
+        <motion.div
+          custom={3}
+          initial="hidden"
+          animate="visible"
+          variants={cardVariants}
+          className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs flex flex-col justify-between"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-500">{data.workout.dayOfWeek} Routine</span>
+            <span className="text-sm font-semibold text-slate-700">{data.workout.dayOfWeek} Routine</span>
             <div
               className={`p-2 rounded-xl ${
                 data.workout.isCompleted
@@ -300,7 +409,7 @@ export default function DashboardPage() {
                   : 'bg-slate-100 text-slate-700'
               }`}
             >
-              <Dumbbell className="w-5 h-5" />
+              <Dumbbell className="w-4 h-4" />
             </div>
           </div>
 
@@ -316,7 +425,7 @@ export default function DashboardPage() {
                 </span>
               ) : data.workout.isRestDay ? (
                 <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-md">
-                  Rest & Muscle Recovery
+                  Rest &amp; Muscle Recovery
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-md">
@@ -332,19 +441,87 @@ export default function DashboardPage() {
 
           <Link
             href="/dashboard/workout-session"
-            className="inline-flex items-center text-xs font-semibold text-emerald-700 hover:text-emerald-800 gap-1 pt-2 border-t border-slate-100"
+            className="inline-flex items-center text-xs font-semibold text-emerald-700 hover:text-emerald-800 gap-1 pt-2.5 border-t border-slate-100"
           >
             <span>{data.workout.isCompleted ? 'Review Session' : 'Start Workout Session'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
-        </div>
+        </motion.div>
       </div>
 
+      {/* Daily Milestones Strip */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, delay: 0.22 }}
+        className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/80 shadow-xs"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-bold text-slate-900">Today&apos;s Goal Milestones</h2>
+          </div>
+          <span className="text-xs text-slate-500">
+            Unlock badges as you hit your daily nutrition &amp; training targets
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          {[
+            {
+              label: '50% Daily Fuel',
+              achieved: caloriePercentage >= 50,
+              detail: `${Math.min(100, caloriePercentage)}% kcal`,
+            },
+            {
+              label: '100% Calorie Target',
+              achieved: caloriePercentage >= 100,
+              detail: `${data.calories.consumed} / ${data.calories.target}`,
+            },
+            {
+              label: 'Protein Goal',
+              achieved: proteinPct >= 100,
+              detail: `${proteinPct}% protein`,
+            },
+            {
+              label: 'Workout Complete',
+              achieved: data.workout.isCompleted,
+              detail: data.workout.isCompleted ? 'Done' : 'Pending',
+            },
+          ].map((m) => (
+            <motion.div
+              key={m.label}
+              whileHover={{ y: -2 }}
+              className={`rounded-xl px-3 py-2.5 border transition-colors flex items-center justify-between gap-2 ${
+                m.achieved
+                  ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                  : 'bg-slate-50/70 border-slate-200/70 text-slate-500'
+              }`}
+            >
+              <div className="min-w-0">
+                <p className="text-xs font-bold truncate">{m.label}</p>
+                <p className="text-[11px] opacity-80 truncate">{m.detail}</p>
+              </div>
+              <CheckCircle2
+                className={`w-4 h-4 shrink-0 ${
+                  m.achieved ? 'text-emerald-600' : 'text-slate-300'
+                }`}
+              />
+            </motion.div>
+          ))}
+        </div>
+      </motion.div>
+
       {/* Charts & Activity Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 sm:gap-6">
         {/* Weekly Calorie Intake Bar Chart */}
-        <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
-          <div className="flex items-center justify-between mb-4">
+        <motion.div
+          custom={4}
+          initial="hidden"
+          animate="visible"
+          variants={cardVariants}
+          className="lg:col-span-2 bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <div>
               <h2 className="text-base font-bold text-slate-900">Weekly Calorie Trend</h2>
               <p className="text-xs text-slate-500">Daily calorie intake over previous logs</p>
@@ -356,32 +533,7 @@ export default function DashboardPage() {
 
           <div className="h-64 w-full">
             {data.recentDietHistory && data.recentDietHistory.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.recentDietHistory}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis
-                    dataKey="date"
-                    tickFormatter={(val) => {
-                      const parts = val.split('-');
-                      return `${parts[1]}/${parts[2]}`;
-                    }}
-                    stroke="#94a3b8"
-                    fontSize={12}
-                  />
-                  <YAxis stroke="#94a3b8" fontSize={12} />
-                  <Tooltip
-                    formatter={(value: any) => [`${value} kcal`, 'Calories']}
-                    labelFormatter={(label) => `Date: ${label}`}
-                    contentStyle={{
-                      backgroundColor: '#ffffff',
-                      borderRadius: '8px',
-                      border: '1px solid #e2e8f0',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)',
-                    }}
-                  />
-                  <Bar dataKey="totalCalories" fill="#16a34a" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <WeeklyCalorieChart data={data.recentDietHistory} />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-center text-slate-400">
                 <Calendar className="w-8 h-8 mb-2" />
@@ -390,10 +542,16 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {/* Recent Activity Feed */}
-        <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
+        <motion.div
+          custom={5}
+          initial="hidden"
+          animate="visible"
+          variants={cardVariants}
+          className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs"
+        >
           <h2 className="text-base font-bold text-slate-900 mb-4">Recent Activity</h2>
 
           {data.recentActivity && data.recentActivity.length > 0 ? (
@@ -432,7 +590,7 @@ export default function DashboardPage() {
               </p>
             </div>
           )}
-        </div>
+        </motion.div>
       </div>
     </div>
   );

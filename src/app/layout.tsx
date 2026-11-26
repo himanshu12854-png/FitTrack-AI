@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { constructMetadata, generateOrganizationSchema, generateSoftwareApplicationSchema } from '@/lib/seo';
+import ClickFeedback from '@/components/ui/ClickFeedback';
+import RouteTransitionLoader from '@/components/ui/RouteTransitionLoader';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -47,7 +49,8 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-full flex flex-col bg-[#fafafa] text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-900">
-        {children}
+        <ClickFeedback />
+        <RouteTransitionLoader>{children}</RouteTransitionLoader>
       </body>
     </html>
   );

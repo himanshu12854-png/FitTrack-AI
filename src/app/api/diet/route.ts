@@ -14,18 +14,31 @@ export async function GET(req: Request) {
 
     await connectDB();
 
-    const profile = await UserFitnessProfile.findOne({ userId: user.id });
-    const timezone = profile?.timezone || 'UTC';
-    const date = searchParams.get('date') || getTodayDate(timezone);
+    const dateParam = searchParams.get('date');
 
-    let dietLog = await DietLog.findOne({
-      userId: user.id,
-      date,
-    });
+    let profile;
+    let dietLog;
+    let date: string;
+
+    if (dateParam) {
+      date = dateParam;
+      [profile, dietLog] = await Promise.all([
+        UserFitnessProfile.findOne({ userId: user.id })
+          .select('timezone dailyCalorieTarget proteinTarget carbsTarget fatsTarget')
+          .lean(),
+        DietLog.findOne({ userId: user.id, date }).lean(),
+      ]);
+    } else {
+      profile = await UserFitnessProfile.findOne({ userId: user.id })
+        .select('timezone dailyCalorieTarget proteinTarget carbsTarget fatsTarget')
+        .lean();
+      const timezone = profile?.timezone || 'UTC';
+      date = getTodayDate(timezone);
+      dietLog = await DietLog.findOne({ userId: user.id, date }).lean();
+    }
 
     if (!dietLog) {
-      dietLog = await DietLog.create({
-        userId: user.id,
+      dietLog = {
         date,
         meals: {
           breakfast: [],
@@ -37,7 +50,7 @@ export async function GET(req: Request) {
         totalProtein: 0,
         totalCarbs: 0,
         totalFats: 0,
-      });
+      };
     }
 
     return NextResponse.json({

@@ -1,25 +1,24 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
 import {
   Sparkles,
   Send,
   RefreshCw,
   CheckCircle2,
-  AlertCircle,
   Dumbbell,
-  Utensils,
-  Check,
   Bot,
   User as UserIcon,
-  Layers,
-  ChevronRight,
   Flame,
   Upload,
 } from 'lucide-react';
 import { IAIMessage } from '@/types';
+import { useToast } from '@/components/ui/Toast';
+import { invalidateCachePrefix } from '@/lib/client-cache';
 
 export default function AIAssistantPage() {
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'chat' | 'builder'>('chat');
 
   // Chat State
@@ -129,8 +128,17 @@ export default function AIAssistantPage() {
       if (!res.ok) throw new Error(json.error || 'Failed to generate plan');
 
       setGeneratedPlan(json.data);
+      toast({
+        title: 'Plan generated',
+        description: 'Review your personalized plan below before applying.',
+        variant: 'success',
+      });
     } catch (err: any) {
-      alert(err.message || 'Error generating plan');
+      toast({
+        title: 'Generation failed',
+        description: err.message || 'Error generating plan',
+        variant: 'error',
+      });
     } finally {
       setBuilderLoading(false);
     }
@@ -154,10 +162,24 @@ export default function AIAssistantPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Failed to apply plan');
 
-      setApplySuccess(`Successfully applied ${type} plan to your account!`);
+      invalidateCachePrefix('dashboard');
+      if (type === 'diet' || type === 'both') {
+        invalidateCachePrefix('diet-');
+      }
+      const successMsg = `Successfully applied ${type} plan to your account!`;
+      setApplySuccess(successMsg);
+      toast({
+        title: 'Plan applied',
+        description: successMsg,
+        variant: 'success',
+      });
       setTimeout(() => setApplySuccess(null), 4000);
     } catch (err: any) {
-      alert(err.message || 'Error applying plan');
+      toast({
+        title: 'Apply failed',
+        description: err.message || 'Error applying plan',
+        variant: 'error',
+      });
     } finally {
       setApplying(false);
     }
@@ -269,44 +291,65 @@ export default function AIAssistantPage() {
               </div>
             ) : (
               messages.map((msg, idx) => (
-                <div
+                <motion.div
                   key={idx}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: 'easeOut' }}
                   className={`flex gap-3 ${
                     msg.role === 'user' ? 'justify-end' : 'justify-start'
                   }`}
                 >
                   {msg.role === 'assistant' && (
-                    <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 text-xs">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 text-xs shadow-2xs">
                       <Bot className="w-4 h-4" />
                     </div>
                   )}
 
                   <div
-                    className={`max-w-xl rounded-2xl px-4 py-3 text-xs sm:text-sm leading-relaxed ${
+                    className={`max-w-xl rounded-2xl px-4 py-3 text-xs sm:text-sm leading-relaxed shadow-2xs ${
                       msg.role === 'user'
-                        ? 'bg-emerald-600 text-white rounded-tr-none'
-                        : 'bg-slate-50 border border-slate-200/80 text-slate-900 rounded-tl-none whitespace-pre-wrap'
+                        ? 'bg-emerald-600 text-white rounded-tr-xs'
+                        : 'bg-slate-50 border border-slate-200/80 text-slate-800 rounded-tl-xs whitespace-pre-wrap'
                     }`}
                   >
                     {msg.content}
                   </div>
 
                   {msg.role === 'user' && (
-                    <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0 text-xs font-semibold">
+                    <div className="w-8 h-8 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0 text-xs font-semibold shadow-2xs">
                       <UserIcon className="w-4 h-4" />
                     </div>
                   )}
-                </div>
+                </motion.div>
               ))
             )}
 
             {chatLoading && (
-              <div className="flex gap-3 items-center text-slate-400 text-xs">
-                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                  <RefreshCw className="w-4 h-4 animate-spin" />
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex gap-3 items-center"
+              >
+                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <Bot className="w-4 h-4" />
                 </div>
-                <span>FitTrack Coach is typing...</span>
-              </div>
+                <div className="bg-slate-50 border border-slate-200/80 rounded-2xl rounded-tl-xs px-4 py-3 flex items-center gap-1.5">
+                  {[0, 1, 2].map((dot) => (
+                    <motion.span
+                      key={dot}
+                      className="w-2 h-2 rounded-full bg-emerald-500"
+                      animate={{ y: [0, -5, 0], opacity: [0.45, 1, 0.45] }}
+                      transition={{
+                        duration: 0.75,
+                        repeat: Infinity,
+                        delay: dot * 0.15,
+                        ease: 'easeInOut',
+                      }}
+                    />
+                  ))}
+                </div>
+              </motion.div>
             )}
             <div ref={chatBottomRef} />
           </div>
