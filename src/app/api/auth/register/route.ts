@@ -63,7 +63,20 @@ export async function POST(req: Request) {
       },
       { status: 201 }
     );
-  } catch {
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /Mongo|database|server selection|connection/i.test(error.message)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Database connection is unavailable. Please try again shortly.',
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
       { success: false, error: 'Internal server error' },
       { status: 500 }

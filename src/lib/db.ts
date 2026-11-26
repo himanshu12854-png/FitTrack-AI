@@ -30,6 +30,10 @@ export async function connectDB() {
   if (!cached.promise) {
     const opts = {
       bufferCommands: false,
+      // Fail quickly in serverless deployments instead of leaving a request
+      // hanging while MongoDB Atlas is unreachable.
+      serverSelectionTimeoutMS: 10_000,
+      connectTimeoutMS: 10_000,
     };
     cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
       return mongoose;
