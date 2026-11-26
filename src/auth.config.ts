@@ -4,6 +4,9 @@ import type { NextAuthConfig } from 'next-auth';
 // import database or password-hashing code.
 const authConfig = {
   providers: [],
+  // Netlify forwards requests through its own host/proxy layer. Explicitly
+  // trust that host so Auth.js can serve sign-in and session endpoints.
+  trustHost: true,
   pages: {
     signIn: '/login',
     error: '/login',
