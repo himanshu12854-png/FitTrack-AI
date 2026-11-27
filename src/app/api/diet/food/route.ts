@@ -3,26 +3,18 @@ import { requireAuth } from '@/lib/auth-utils';
 import { connectDB } from '@/lib/db';
 import DietLog from '@/models/DietLog';
 import { foodEntrySchema } from '@/lib/validations';
+import { calculateDailyDietTotals } from '@/lib/nutrition';
 import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
 
 function recalculateTotals(dietLog: any) {
-  let calories = 0, protein = 0, carbs = 0, fats = 0;
-  const meals = ['breakfast', 'lunch', 'dinner', 'snacks'];
-  for (const meal of meals) {
-    for (const item of (dietLog.meals[meal] || [])) {
-      const qty = item.servingQuantity || 1;
-      calories += (item.calories || 0) * qty;
-      protein += (item.protein || 0) * qty;
-      carbs += (item.carbs || 0) * qty;
-      fats += (item.fats || 0) * qty;
-    }
-  }
-  dietLog.totalCalories = Math.round(calories);
-  dietLog.totalProtein = Math.round(protein);
-  dietLog.totalCarbs = Math.round(carbs);
-  dietLog.totalFats = Math.round(fats);
+  const totals = calculateDailyDietTotals(dietLog.meals);
+  dietLog.totalCalories = totals.totalCalories;
+  dietLog.totalProtein = totals.totalProtein;
+  dietLog.totalCarbs = totals.totalCarbs;
+  dietLog.totalFats = totals.totalFats;
+  dietLog.totalMicronutrients = totals.totalMicronutrients;
 }
 
 // POST: Add new food item
@@ -36,7 +28,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: validated.error.issues[0].message }, { status: 400 });
     }
 
-    const { date, mealType, name, calories, protein, carbs, fats, servingSize, servingQuantity } = validated.data;
+    const {
+      date,
+      mealType,
+      name,
+      calories,
+      protein,
+      carbs,
+      fats,
+      servingSize,
+      servingQuantity,
+      micronutrients,
+      nutrientSource,
+      isEstimate,
+    } = validated.data;
 
     await connectDB();
 
@@ -58,6 +63,9 @@ export async function POST(req: Request) {
       fats,
       servingSize: servingSize || '1 serving',
       servingQuantity: servingQuantity || 1,
+      micronutrients,
+      nutrientSource: nutrientSource || 'Manual',
+      isEstimate: isEstimate ?? false,
     };
 
     dietLog.meals[mealType].push(newFoodEntry);

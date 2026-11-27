@@ -171,6 +171,28 @@ export default function WorkoutSessionPage() {
     setSession({ ...session, exercises: updatedExercises });
   };
 
+  const handleDeleteExercise = (exIndex: number) => {
+    if (!session) return;
+
+    const exercise = session.exercises[exIndex];
+    if (!exercise) return;
+
+    const shouldDelete = window.confirm(
+      `Remove "${exercise.exerciseName}" from this workout session? You can still cancel by leaving the session unsaved.`
+    );
+    if (!shouldDelete) return;
+
+    setSession({
+      ...session,
+      exercises: session.exercises.filter((_, index) => index !== exIndex),
+    });
+    toast({
+      title: 'Exercise removed',
+      description: 'Tap Save Progress to permanently update this workout session.',
+      variant: 'success',
+    });
+  };
+
   const handleSaveSession = async (markComplete = false) => {
     if (!session) return;
 
@@ -191,6 +213,8 @@ export default function WorkoutSessionPage() {
 
       setSession(json.data);
       invalidateCachePrefix('dashboard');
+      invalidateCachePrefix('workout-history');
+      invalidateCachePrefix('workout-session');
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
 
@@ -276,6 +300,8 @@ export default function WorkoutSessionPage() {
     0
   );
   const totalSetsCount = session.exercises.reduce((acc, ex) => acc + ex.sets.length, 0);
+  const workoutProgress =
+    totalSetsCount > 0 ? Math.round((completedSetsCount / totalSetsCount) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -298,6 +324,30 @@ export default function WorkoutSessionPage() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900 mt-2">{session.workoutName}</h1>
           <p className="text-xs text-slate-400 mt-1">{formatDate(currentDate)}</p>
+
+          <div className="mt-4 max-w-md">
+            <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+              <span className="font-semibold text-slate-700">Workout progress</span>
+              <span className="font-bold text-emerald-700">
+                {completedSetsCount} / {totalSetsCount} sets · {workoutProgress}%
+              </span>
+            </div>
+            <div
+              className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
+              role="progressbar"
+              aria-label="Workout completion progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={workoutProgress}
+            >
+              <motion.div
+                className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400"
+                initial={{ width: 0 }}
+                animate={{ width: `${workoutProgress}%` }}
+                transition={{ duration: 0.35, ease: 'easeOut' }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Action Controls */}
@@ -355,12 +405,20 @@ export default function WorkoutSessionPage() {
 
       {/* Exercises & Interactive Sets */}
       <div className="space-y-4">
-        {session.exercises.map((exercise, exIndex) => (
+        {session.exercises.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center">
+            <Dumbbell className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-slate-700">No exercises in this session</p>
+            <p className="text-xs text-slate-500 mt-1">
+              Save Progress to keep this session without the removed exercises.
+            </p>
+          </div>
+        ) : session.exercises.map((exercise, exIndex) => (
           <div
-            key={exercise.exerciseName}
+            key={`${exercise.exerciseName}-${exIndex}`}
             className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden"
           >
-            <div className="p-4 bg-slate-50/60 border-b border-slate-100 flex items-center justify-between">
+            <div className="p-4 bg-slate-50/60 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900">{exercise.exerciseName}</h3>
                 {exercise.muscleGroup && (
@@ -370,13 +428,25 @@ export default function WorkoutSessionPage() {
                 )}
               </div>
 
-              <button
-                onClick={() => handleAddSet(exIndex)}
-                className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md transition"
-              >
-                <Plus className="w-3 h-3" />
-                <span>Add Set</span>
-              </button>
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <button
+                  onClick={() => handleAddSet(exIndex)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 px-2.5 py-1.5 rounded-md transition"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Add Set</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteExercise(exIndex)}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-md transition disabled:opacity-50"
+                  aria-label={`Remove ${exercise.exerciseName} from this workout`}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Remove</span>
+                </button>
+              </div>
             </div>
 
             {/* Set Table */}

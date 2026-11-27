@@ -72,6 +72,10 @@ const AIConversationSchema = new Schema<IAIConversation>(
     },
     lastMessageAt: {
       type: Date,
+      default: Date.now,
+      // MongoDB removes inactive chats after six hours. Its TTL monitor runs
+      // about once a minute, while the API also cleans up immediately.
+      expires: 60 * 60 * 6,
     },
   },
   {

@@ -12,16 +12,22 @@ export async function GET(req: Request) {
     const user = await requireAuth();
     const { searchParams } = new URL(req.url);
     const exercise = searchParams.get('exercise');
+    const limit = Math.min(30, Math.max(1, parseInt(searchParams.get('limit') || '10', 10) || 10));
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
+    const skip = (page - 1) * limit;
 
     await connectDB();
 
-    const [recentSessions, prs, progressionData] = await Promise.all([
-      // 1. Recent completed workout sessions
+    const [recentSessionsRaw, prs, progressionData] = await Promise.all([
+      // 1. Recent completed workout sessions (paginated + projected)
       WorkoutSession.find({
         userId: user.id,
+        isCompleted: true,
       })
+        .select('workoutName dayName date duration caloriesBurned isCompleted exercises.exerciseName')
         .sort({ date: -1 })
-        .limit(20)
+        .skip(skip)
+        .limit(limit + 1)
         .lean(),
 
       // 2. Personal records summary
@@ -44,13 +50,17 @@ export async function GET(req: Request) {
       exercise
         ? ExerciseHistory.find({
             userId: user.id,
-            exerciseName: { $regex: new RegExp(`^${exercise}$`, 'i') },
+            exerciseName: { $regex: new RegExp(`^${exercise.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
           })
+            .select('date bestWeight totalVolume')
             .sort({ date: 1 })
             .limit(30)
             .lean()
         : Promise.resolve([]),
     ]);
+
+    const hasMore = recentSessionsRaw.length > limit;
+    const recentSessions = hasMore ? recentSessionsRaw.slice(0, limit) : recentSessionsRaw;
 
     return NextResponse.json({
       success: true,
@@ -58,6 +68,11 @@ export async function GET(req: Request) {
         recentSessions,
         personalRecords: prs,
         progressionData,
+        pagination: {
+          page,
+          limit,
+          hasMore,
+        },
       },
     });
   } catch (error: any) {

@@ -33,8 +33,9 @@ function LoginForm() {
         throw new Error('Invalid email or password.');
       }
 
-      router.push('/dashboard');
-      router.refresh();
+      // Auth.js has already set the JWT cookie. A client-side replace avoids
+      // the extra server render that router.refresh() caused after login.
+      router.replace('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Login failed.');
     } finally {

@@ -10,7 +10,10 @@ export type {
 } from './UserFitnessProfile';
 
 export { default as DietLog } from './DietLog';
-export type { IDietLog, IFoodEntry } from './DietLog';
+export type { IDietLog, IFoodEntry, IMicronutrients, NutrientSource } from './DietLog';
+
+export { default as FoodNutritionCache } from './FoodNutritionCache';
+export type { IFoodNutritionCache } from './FoodNutritionCache';
 
 export { default as WorkoutPlan } from './WorkoutPlan';
 export type {

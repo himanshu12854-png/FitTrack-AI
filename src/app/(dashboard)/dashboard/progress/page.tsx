@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import { getCached, setCached } from '@/lib/client-cache';
+import LazySection from '@/components/ui/LazySection';
 
 const ExerciseProgressChart = dynamic(
   () => import('@/components/charts/ExerciseProgressChart'),
@@ -38,10 +39,17 @@ interface HistoryResponse {
     bestWeight: number;
     totalVolume: number;
   }>;
+  pagination?: {
+    page: number;
+    limit: number;
+    hasMore: boolean;
+  };
 }
 
 export default function ProgressPage() {
   const [selectedExercise, setSelectedExercise] = useState('Barbell Bench Press');
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [data, setData] = useState<HistoryResponse | null>(() => {
     const cached = getCached<HistoryResponse>('workout-history-Barbell Bench Press', 60000);
     return cached ? cached.data : null;
@@ -51,18 +59,34 @@ export default function ProgressPage() {
     return !cached;
   });
 
-  const fetchHistory = async (exerciseName: string, hasCache = false) => {
+  const fetchHistory = async (exerciseName: string, hasCache = false, pageNum = 1) => {
     try {
-      if (!hasCache) setLoading(true);
-      const res = await fetch(`/api/workouts/history?exercise=${encodeURIComponent(exerciseName)}`);
+      if (!hasCache && pageNum === 1) setLoading(true);
+      if (pageNum > 1) setLoadingMore(true);
+      const res = await fetch(
+        `/api/workouts/history?exercise=${encodeURIComponent(exerciseName)}&limit=5&page=${pageNum}`
+      );
       const json = await res.json();
       if (json.success) {
-        setCached(`workout-history-${exerciseName}`, json.data);
-        setData(json.data);
+        if (pageNum === 1) {
+          setCached(`workout-history-${exerciseName}`, json.data);
+          setData(json.data);
+        } else {
+          setData((prev) =>
+            prev
+              ? {
+                  ...json.data,
+                  recentSessions: [...prev.recentSessions, ...(json.data.recentSessions || [])],
+                }
+              : json.data
+          );
+        }
+        setPage(pageNum);
       }
     } catch {
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
@@ -140,6 +164,15 @@ export default function ProgressPage() {
       </div>
 
       {/* Personal Records & Recent Workout Logs Grid */}
+      {/* Personal Records & Session History (Lazy-loaded on viewport entry) */}
+      <LazySection
+        fallback={
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="h-64 bg-white rounded-2xl border border-slate-200/80 animate-pulse" />
+            <div className="h-64 bg-white rounded-2xl border border-slate-200/80 animate-pulse" />
+          </div>
+        }
+      >
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Personal Records Trophy Card */}
         <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
@@ -229,6 +262,16 @@ export default function ProgressPage() {
                   </span>
                 </div>
               ))}
+              {data.pagination?.hasMore && (
+                <button
+                  type="button"
+                  onClick={() => fetchHistory(selectedExercise, true, page + 1)}
+                  disabled={loadingMore}
+                  className="w-full py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-50"
+                >
+                  {loadingMore ? 'Loading...' : 'Load More Sessions'}
+                </button>
+              )}
             </div>
           ) : (
             <div className="py-10 text-center text-slate-400 text-xs">
@@ -237,6 +280,7 @@ export default function ProgressPage() {
           )}
         </div>
       </div>
+      </LazySection>
     </div>
   );
 }

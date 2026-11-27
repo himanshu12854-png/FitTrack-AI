@@ -1,16 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, X, PlusCircle, Activity, Sparkles } from 'lucide-react';
-import { useSession } from 'next-auth/react';
+import { Menu, X, PlusCircle, Activity, Sparkles, LogOut } from 'lucide-react';
+import { signOut, useSession } from 'next-auth/react';
 import { formatDate } from '@/lib/utils';
 
 export default function DashboardHeader() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [todayLabel, setTodayLabel] = useState('');
   const pathname = usePathname();
   const { data: session } = useSession();
+
+  // Formatting a date during the server render can disagree with the user's
+  // browser timezone and cause a hydration mismatch that breaks click events.
+  useEffect(() => {
+    setTodayLabel(formatDate(new Date()));
+  }, []);
 
   const getPageTitle = () => {
     switch (pathname) {
@@ -60,8 +67,8 @@ export default function DashboardHeader() {
           <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none">
             {getPageTitle()}
           </h1>
-          <p className="text-xs text-slate-400 mt-1 hidden sm:block">
-            {formatDate(new Date())}
+          <p className="text-xs text-slate-400 mt-1 hidden sm:block" suppressHydrationWarning>
+            {todayLabel}
           </p>
         </div>
       </div>
@@ -100,6 +107,16 @@ export default function DashboardHeader() {
               {link.name}
             </Link>
           ))}
+          <div className="pt-3 mt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => signOut({ callbackUrl: '/login' })}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold text-rose-700 hover:bg-rose-50 transition"
+            >
+              <LogOut className="w-4 h-4" />
+              Log out
+            </button>
+          </div>
         </div>
       )}
     </header>

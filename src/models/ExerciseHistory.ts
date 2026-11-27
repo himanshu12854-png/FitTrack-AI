@@ -52,6 +52,7 @@ const ExerciseHistorySchema = new Schema<IExerciseHistory>(
 );
 
 ExerciseHistorySchema.index({ userId: 1, exerciseName: 1, date: -1 });
+ExerciseHistorySchema.index({ userId: 1, exerciseName: 1, bestWeight: -1 });
 
 const ExerciseHistory: Model<IExerciseHistory> =
   mongoose.models.ExerciseHistory ||

@@ -19,12 +19,14 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { getTodayDate } from '@/lib/utils';
-import { IFoodEntry, MealType } from '@/types';
+import { RECOMMENDED_DAILY_INTAKE } from '@/lib/nutrition';
+import { IFoodEntry, IMicronutrients, MealType, NutrientSource } from '@/types';
 import { getCached, setCached, invalidateCachePrefix } from '@/lib/client-cache';
 import { useToast } from '@/components/ui/Toast';
 import { useMilestone } from '@/components/ui/MilestoneCelebration';
 import { CaloriesSkeleton } from '@/components/ui/Skeleton';
 import CalorieRing from '@/components/ui/CalorieRing';
+import LazySection from '@/components/ui/LazySection';
 
 interface DietResponse {
   dietLog: {
@@ -40,6 +42,7 @@ interface DietResponse {
     totalProtein: number;
     totalCarbs: number;
     totalFats: number;
+    totalMicronutrients?: IMicronutrients;
   };
   targets: {
     calories: number;
@@ -75,6 +78,11 @@ export default function CaloriesPage() {
   const [fats, setFats] = useState<number | ''>('');
   const [servingSize, setServingSize] = useState('1 serving');
   const [servingQuantity, setServingQuantity] = useState(1);
+  const [micronutrients, setMicronutrients] = useState<IMicronutrients | undefined>(undefined);
+  const [nutrientSource, setNutrientSource] = useState<NutrientSource>('Manual');
+  const [isEstimate, setIsEstimate] = useState(false);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupNoMatch, setLookupNoMatch] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // AI Food Suggestions state
@@ -149,6 +157,10 @@ export default function CaloriesPage() {
     setFats('');
     setServingSize('1 serving');
     setServingQuantity(1);
+    setMicronutrients(undefined);
+    setNutrientSource('Manual');
+    setIsEstimate(false);
+    setLookupNoMatch(false);
     setIsModalOpen(true);
   };
 
@@ -162,7 +174,55 @@ export default function CaloriesPage() {
     setFats(entry.fats);
     setServingSize(entry.servingSize || '1 serving');
     setServingQuantity(entry.servingQuantity || 1);
+    setMicronutrients(entry.micronutrients);
+    setNutrientSource(entry.nutrientSource || 'Manual');
+    setIsEstimate(Boolean(entry.isEstimate));
+    setLookupNoMatch(false);
     setIsModalOpen(true);
+  };
+
+  const handleLookupNutrition = async (allowAiEstimate = false) => {
+    if (!name.trim() || name.trim().length < 2) {
+      toast({ title: 'Enter food name', description: 'Type at least 2 characters to look up.', variant: 'info' });
+      return;
+    }
+    try {
+      setLookupLoading(true);
+      setLookupNoMatch(false);
+      const res = await fetch(
+        `/api/nutrition/lookup?q=${encodeURIComponent(name.trim())}&aiEstimate=${allowAiEstimate ? 'true' : 'false'}`
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Lookup failed');
+      if (!json.data) {
+        setLookupNoMatch(true);
+        toast({
+          title: 'No database match',
+          description: 'No exact match in nutrition DB. Enter manually or try AI Estimate.',
+          variant: 'info',
+        });
+        return;
+      }
+      const match = json.data;
+      setName(match.displayName || name);
+      setServingSize(match.servingSize || '1 serving');
+      setCalories(match.calories);
+      setProtein(match.protein);
+      setCarbs(match.carbs);
+      setFats(match.fats);
+      setMicronutrients(match.micronutrients);
+      setNutrientSource(match.source);
+      setIsEstimate(Boolean(match.isEstimate));
+      toast({
+        title: match.isEstimate ? 'AI Estimate loaded' : 'Nutrition loaded',
+        description: `Source: ${match.source}`,
+        variant: 'success',
+      });
+    } catch (err: any) {
+      toast({ title: 'Lookup error', description: err.message || 'Unable to look up food', variant: 'error' });
+    } finally {
+      setLookupLoading(false);
+    }
   };
 
   const handleSaveFood = async (e: React.FormEvent) => {
@@ -205,6 +265,9 @@ export default function CaloriesPage() {
               fats: Number(fats || 0),
               servingSize,
               servingQuantity: Number(servingQuantity),
+              micronutrients,
+              nutrientSource,
+              isEstimate,
             }),
           });
           if (!res.ok) throw new Error('Failed to add food');
@@ -681,9 +744,22 @@ export default function CaloriesPage() {
                         className="p-4 flex items-center justify-between hover:bg-slate-50/60 transition gap-3"
                       >
                         <div className="min-w-0">
-                          <h4 className="text-sm font-semibold text-slate-900 truncate">
-                            {item.name}
-                          </h4>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-semibold text-slate-900 truncate">
+                              {item.name}
+                            </h4>
+                            {item.nutrientSource && item.nutrientSource !== 'Manual' && (
+                              <span
+                                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                  item.isEstimate
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                }`}
+                              >
+                                {item.nutrientSource}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-slate-500">
                             {item.servingQuantity} × {item.servingSize || '1 serving'} •{' '}
                             <span className="font-semibold text-slate-700">
@@ -693,6 +769,19 @@ export default function CaloriesPage() {
                             {Math.round((item.carbs || 0) * (item.servingQuantity || 1))}g, F:{' '}
                             {Math.round((item.fats || 0) * (item.servingQuantity || 1))}g)
                           </p>
+                          {item.micronutrients &&
+                          Object.values(item.micronutrients).some((v) => typeof v === 'number' && v > 0) ? (
+                            <p className="text-[11px] text-slate-400 mt-0.5">
+                              Iron: {((item.micronutrients.iron_mg || 0) * (item.servingQuantity || 1)).toFixed(1)}mg •
+                              Calcium: {Math.round((item.micronutrients.calcium_mg || 0) * (item.servingQuantity || 1))}mg •
+                              Vit C: {((item.micronutrients.vitaminC_mg || 0) * (item.servingQuantity || 1)).toFixed(1)}mg •
+                              Fiber: {((item.micronutrients.fiber_g || 0) * (item.servingQuantity || 1)).toFixed(1)}g
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-slate-400 italic mt-0.5">
+                              Micronutrients: no data
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1 shrink-0">
@@ -724,6 +813,50 @@ export default function CaloriesPage() {
           );
         })}
       </div>
+
+      {/* Daily Micronutrients & % RDI (Lazy-loaded on viewport entry) */}
+      <LazySection
+        fallback={<div className="h-44 bg-white rounded-2xl border border-slate-200/80 animate-pulse" />}
+      >
+        <div className="bg-white rounded-2xl p-5 sm:p-6 border border-slate-200/80 shadow-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                Daily Micronutrients &amp; % Recommended Daily Intake
+              </h2>
+              <p className="text-xs text-slate-500">
+                Server-computed totals across today&apos;s logged foods (USDA / Built-in DB / AI Estimate)
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {(Object.keys(RECOMMENDED_DAILY_INTAKE) as Array<keyof typeof RECOMMENDED_DAILY_INTAKE>).map(
+              (key) => {
+                const meta = RECOMMENDED_DAILY_INTAKE[key];
+                const rawVal = data?.dietLog.totalMicronutrients?.[key] || 0;
+                const pct = Math.min(100, Math.round((rawVal / meta.rdi) * 100));
+                return (
+                  <div key={key} className="p-3 rounded-xl bg-slate-50/70 border border-slate-200/70">
+                    <div className="flex items-center justify-between text-xs font-semibold">
+                      <span className="text-slate-700">{meta.label}</span>
+                      <span className="text-emerald-700">{pct}%</span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {rawVal} {meta.unit} / {meta.rdi} {meta.unit}
+                    </p>
+                    <div className="w-full h-1.5 bg-slate-200/70 rounded-full mt-2 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-600 rounded-full transition-all duration-300"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              }
+            )}
+          </div>
+        </div>
+      </LazySection>
 
       {/* Add / Edit Food Modal */}
       <AnimatePresence>
@@ -759,14 +892,45 @@ export default function CaloriesPage() {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Food Name *
                   </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Grilled Chicken Breast"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Grilled Chicken Breast"
+                      value={name}
+                      onChange={(e) => {
+                        setName(e.target.value);
+                        setLookupNoMatch(false);
+                      }}
+                      className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleLookupNutrition(false)}
+                      disabled={lookupLoading}
+                      className="px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 transition shrink-0 disabled:opacity-50"
+                    >
+                      {lookupLoading ? 'Looking up...' : 'Lookup DB'}
+                    </button>
+                  </div>
+                  {lookupNoMatch && (
+                    <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-amber-700 bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-200">
+                      <span>No DB match found.</span>
+                      <button
+                        type="button"
+                        onClick={() => handleLookupNutrition(true)}
+                        disabled={lookupLoading}
+                        className="font-bold underline hover:text-amber-900"
+                      >
+                        Try AI Estimate
+                      </button>
+                    </div>
+                  )}
+                  {nutrientSource !== 'Manual' && (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Source: <strong className={isEstimate ? 'text-amber-700' : 'text-emerald-700'}>{nutrientSource}</strong>
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

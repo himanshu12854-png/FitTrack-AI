@@ -16,16 +16,34 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
+export const micronutrientsSchema = z
+  .object({
+    fiber_g: z.number().min(0).max(500).optional(),
+    iron_mg: z.number().min(0).max(500).optional(),
+    calcium_mg: z.number().min(0).max(10000).optional(),
+    vitaminC_mg: z.number().min(0).max(5000).optional(),
+    vitaminD_mcg: z.number().min(0).max(1000).optional(),
+    vitaminB12_mcg: z.number().min(0).max(1000).optional(),
+    potassium_mg: z.number().min(0).max(20000).optional(),
+    sodium_mg: z.number().min(0).max(20000).optional(),
+  })
+  .optional();
+
 export const foodEntrySchema = z.object({
-  name: z.string().min(1, 'Food name is required').max(100),
-  calories: z.number().min(0, 'Calories cannot be negative'),
-  protein: z.number().min(0, 'Protein cannot be negative').default(0),
-  carbs: z.number().min(0, 'Carbs cannot be negative').default(0),
-  fats: z.number().min(0, 'Fats cannot be negative').default(0),
-  servingSize: z.string().optional().default('1 serving'),
-  servingQuantity: z.number().min(0.1, 'Quantity must be greater than 0').default(1),
+  name: z.string().trim().min(1, 'Food name is required').max(120),
+  calories: z.number().min(0, 'Calories cannot be negative').max(20000),
+  protein: z.number().min(0, 'Protein cannot be negative').max(2000).default(0),
+  carbs: z.number().min(0, 'Carbs cannot be negative').max(2000).default(0),
+  fats: z.number().min(0, 'Fats cannot be negative').max(2000).default(0),
+  servingSize: z.string().trim().max(80).optional().default('1 serving'),
+  servingQuantity: z.number().min(0.1, 'Quantity must be greater than 0').max(100).default(1),
   mealType: z.enum(['breakfast', 'lunch', 'dinner', 'snacks']),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
+  micronutrients: micronutrientsSchema,
+  nutrientSource: z
+    .enum(['USDA FoodData Central', 'Built-in Nutrition DB', 'AI Estimate', 'Manual'])
+    .optional(),
+  isEstimate: z.boolean().optional(),
 });
 
 export const updateFoodEntrySchema = foodEntrySchema.partial().extend({
@@ -81,8 +99,9 @@ export const workoutSessionSchema = z.object({
   date: z.string().or(z.date()),
   exercises: z.array(sessionExerciseSchema),
   isCompleted: z.boolean().default(false),
-  duration: z.number().int().min(0).optional(),
-  notes: z.string().optional(),
+  duration: z.number().int().min(0).max(1440).optional(),
+  caloriesBurned: z.number().min(0).max(10000).optional(),
+  notes: z.string().max(1000).optional(),
 });
 
 export const fitnessProfileSchema = z.object({

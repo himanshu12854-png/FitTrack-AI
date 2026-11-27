@@ -5,11 +5,27 @@ import AIConversation from '@/models/AIConversation';
 import UserFitnessProfile from '@/models/UserFitnessProfile';
 import DietLog from '@/models/DietLog';
 import WorkoutPlan from '@/models/WorkoutPlan';
-import { chatWithFitnessAssistant, FitnessContext } from '@/lib/gemini';
+import { chatWithFitnessAssistant, FitnessContext, getGeminiErrorMessage } from '@/lib/gemini';
 import { aiChatMessageSchema } from '@/lib/validations';
 import { getTodayDate } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
+
+const CHAT_RETENTION_MS = 6 * 60 * 60 * 1000;
+
+async function removeExpiredChats(userId: string | undefined) {
+  if (!userId) return;
+
+  const cutoff = new Date(Date.now() - CHAT_RETENTION_MS);
+  await AIConversation.deleteMany({
+    userId,
+    $or: [
+      { lastMessageAt: { $lt: cutoff } },
+      // Covers chats created before lastMessageAt existed in the schema.
+      { lastMessageAt: { $exists: false }, updatedAt: { $lt: cutoff } },
+    ],
+  });
+}
 
 export async function POST(req: Request) {
   try {
@@ -24,6 +40,7 @@ export async function POST(req: Request) {
     const { conversationId, message, includeContext } = validated.data;
 
     await connectDB();
+    await removeExpiredChats(user.id);
 
     let conversation;
     if (conversationId) {
@@ -88,10 +105,7 @@ export async function POST(req: Request) {
     if (error.message === 'Unauthorized') {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
-    return NextResponse.json(
-      { success: false, error: error.message || 'Failed to process AI chat request' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: getGeminiErrorMessage(error) }, { status: 503 });
   }
 }
 
@@ -103,6 +117,7 @@ export async function GET(req: Request) {
     const conversationId = searchParams.get('id');
 
     await connectDB();
+    await removeExpiredChats(user.id);
 
     if (conversationId) {
       const conv = await AIConversation.findOne({ _id: conversationId, userId: user.id });

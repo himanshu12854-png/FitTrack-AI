@@ -28,6 +28,7 @@ export interface IWorkoutSession extends Document {
   exercises: ISessionExercise[];
   isCompleted: boolean;
   duration?: number;
+  caloriesBurned?: number;
   notes?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -108,9 +109,16 @@ const WorkoutSessionSchema = new Schema<IWorkoutSession>(
     },
     duration: {
       type: Number,
+      min: 0,
+    },
+    caloriesBurned: {
+      type: Number,
+      min: 0,
+      default: 0,
     },
     notes: {
       type: String,
+      maxlength: 1000,
     },
   },
   {
@@ -120,6 +128,7 @@ const WorkoutSessionSchema = new Schema<IWorkoutSession>(
 
 WorkoutSessionSchema.index({ userId: 1, date: -1 });
 WorkoutSessionSchema.index({ userId: 1, weekStart: 1 });
+WorkoutSessionSchema.index({ userId: 1, isCompleted: 1, date: -1 });
 
 const WorkoutSession: Model<IWorkoutSession> =
   mongoose.models.WorkoutSession ||

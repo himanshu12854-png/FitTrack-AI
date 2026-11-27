@@ -1,3 +1,20 @@
+export type NutrientSource =
+  | 'USDA FoodData Central'
+  | 'Built-in Nutrition DB'
+  | 'AI Estimate'
+  | 'Manual';
+
+export interface IMicronutrients {
+  fiber_g?: number;
+  iron_mg?: number;
+  calcium_mg?: number;
+  vitaminC_mg?: number;
+  vitaminD_mcg?: number;
+  vitaminB12_mcg?: number;
+  potassium_mg?: number;
+  sodium_mg?: number;
+}
+
 // Food Entry Interface
 export interface IFoodEntry {
   _id?: string;
@@ -8,6 +25,9 @@ export interface IFoodEntry {
   fats: number;
   servingSize?: string;
   servingQuantity: number;
+  micronutrients?: IMicronutrients;
+  nutrientSource?: NutrientSource;
+  isEstimate?: boolean;
 }
 
 // Meal Types

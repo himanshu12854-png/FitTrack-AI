@@ -1,39 +1,64 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { z } from 'zod';
 import { IUserFitnessProfile, IDietLog, IWorkoutPlan } from '@/types';
 
 const apiKey = process.env.GEMINI_API_KEY;
 
-// Start with the lowest-latency model. If Gemini reports that a model is
-// unavailable or temporarily overloaded, subsequent requests use the next
-// available text-generation model in this list.
+// Text-generation models, ordered from quick/low-cost to more capable.
+// Keep only text-capable models here: embedding and image-only models cannot
+// answer a coaching chat.
 const GEMINI_MODELS = [
   'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
   'gemini-3.8-flash',
   'gemini-3.6-flash',
-  'gemini-3.1-flash-lite',
   'gemini-3-flash-preview',
   'gemini-4-hydrogen',
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
 ] as const;
 
 let activeModelIndex = 0;
 
 export const geminiClient = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 
-function canTryAnotherModel(error: unknown) {
-  const status =
-    typeof error === 'object' && error !== null && 'status' in error
-      ? (error as { status?: number }).status
-      : undefined;
+function getGeminiErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
 
-  return status === 404 || status === 429 || (status !== undefined && status >= 500);
+  const maybeError = error as {
+    status?: number;
+    response?: { status?: number };
+    error?: { code?: number };
+  };
+
+  return maybeError.status ?? maybeError.response?.status ?? maybeError.error?.code;
+}
+
+function canTryAnotherModel(error: unknown) {
+  const status = getGeminiErrorStatus(error);
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  // The Gemini SDK does not always expose an HTTP status. Treat temporary
+  // network/provider failures as retryable, but do not hide a bad API key.
+  return (
+    status === 404 ||
+    status === 408 ||
+    status === 429 ||
+    (status !== undefined && status >= 500) ||
+    /resource_exhausted|quota|rate limit|timeout|timed out|network|fetch failed|unavailable|overloaded|internal/.test(
+      message
+    )
+  );
 }
 
 async function withGeminiFallback<T>(operation: (modelName: string) => Promise<T>): Promise<T> {
   let lastError: unknown;
 
-  for (let index = activeModelIndex; index < GEMINI_MODELS.length; index += 1) {
+  // Start at the most recently working model, then wrap around so an older
+  // fallback can recover after a temporary provider outage.
+  for (let offset = 0; offset < GEMINI_MODELS.length; offset += 1) {
+    const index = (activeModelIndex + offset) % GEMINI_MODELS.length;
     try {
       const result = await operation(GEMINI_MODELS[index]);
       activeModelIndex = index;
@@ -45,8 +70,25 @@ async function withGeminiFallback<T>(operation: (modelName: string) => Promise<T
   }
 
   throw lastError instanceof Error
-    ? lastError
-    : new Error('All configured Gemini models are currently unavailable.');
+    ? new Error(getGeminiErrorMessage(lastError))
+    : new Error('The AI service is temporarily unavailable. Please try again in a moment.');
+}
+
+/** A safe, understandable message for the app UI. Never expose provider internals. */
+export function getGeminiErrorMessage(error: unknown) {
+  const status = getGeminiErrorStatus(error);
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  if (/api key|api_key|permission denied|unauthenticated|forbidden/.test(message) || status === 401 || status === 403) {
+    return 'AI service configuration needs attention. Please contact the site owner.';
+  }
+  if (status === 429 || /resource_exhausted|quota|rate limit/.test(message)) {
+    return 'The AI service is busy right now. Please wait a minute and try again.';
+  }
+  if (status === 404 || /not found|model.*not/.test(message)) {
+    return 'The AI model is updating. Please try again in a moment.';
+  }
+  return 'The AI service is temporarily unavailable. Please try again in a moment.';
 }
 
 export interface FitnessContext {
@@ -230,17 +272,219 @@ Plan must cover all 7 days of the week (Monday through Sunday) with clear exerci
       model: modelName,
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 2200,
+        maxOutputTokens: 3200,
         responseMimeType: 'application/json',
       },
     });
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error('AI returned an invalid JSON plan format.');
+    let lastErr = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const promptToSend =
+        attempt === 0
+          ? prompt
+          : `${prompt}\n\nPrevious JSON failed validation (${lastErr}). Return valid JSON strictly matching the schema.`;
+      const result = await model.generateContent(promptToSend);
+      const text = result.response.text();
+      try {
+        const parsed = JSON.parse(text);
+        const validated = structuredPlanSchema.safeParse(parsed);
+        if (validated.success && (validated.data.workoutPlan || validated.data.dietPlan)) {
+          return validated.data;
+        }
+        lastErr = validated.success
+          ? 'Plan missing both workoutPlan and dietPlan'
+          : validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : 'Invalid JSON';
+      }
     }
+    throw new Error('AI returned an invalid plan format. Please try again.');
+  });
+}
+
+const roadmapExerciseSchema = z.object({
+  name: z.string().min(1),
+  sets: z.number().int().min(1).max(20),
+  reps: z.string().min(1),
+  progressionCue: z.string().min(1),
+});
+
+const roadmapPhaseSchema = z.object({
+  phaseNumber: z.number().int().min(1),
+  title: z.string().min(2),
+  weekRange: z.string().min(1),
+  focus: z.string().min(2),
+  weeklyFrequency: z.number().int().min(1).max(7),
+  keyExercises: z.array(roadmapExerciseSchema).min(1),
+  milestone: z.string().min(2),
+});
+
+export const exerciseRoadmapSchema = z.object({
+  title: z.string().min(3),
+  durationWeeks: z.number().int().min(2).max(24),
+  goalSummary: z.string().min(5),
+  phases: z.array(roadmapPhaseSchema).min(2).max(6),
+});
+
+export type ExerciseRoadmap = z.infer<typeof exerciseRoadmapSchema>;
+
+const structuredPlanSchema = z.object({
+  workoutPlan: z
+    .object({
+      name: z.string().min(2),
+      description: z.string().optional().default(''),
+      days: z
+        .array(
+          z.object({
+            dayName: z.string().min(1),
+            name: z.string().min(1),
+            isRestDay: z.boolean().default(false),
+            exercises: z
+              .array(
+                z.object({
+                  name: z.string().min(1),
+                  muscleGroup: z.string().optional().default('Full Body'),
+                  sets: z.number().int().min(1).max(20).default(3),
+                  reps: z.string().min(1).default('8-12'),
+                  restSeconds: z.number().int().min(0).max(600).default(60),
+                  notes: z.string().optional(),
+                })
+              )
+              .default([]),
+          })
+        )
+        .min(1),
+    })
+    .optional(),
+  dietPlan: z
+    .object({
+      dailyCalorieTarget: z.number().min(800).max(10000),
+      proteinTarget: z.number().min(0).max(600),
+      carbsTarget: z.number().min(0).max(1000),
+      fatsTarget: z.number().min(0).max(500),
+      overview: z.string().optional(),
+      mealSuggestions: z
+        .array(
+          z.object({
+            meal: z.string().min(1),
+            items: z.array(z.string()).default([]),
+            calories: z.number().min(0),
+          })
+        )
+        .optional(),
+    })
+    .optional(),
+});
+
+export async function generateExerciseRoadmap(params: {
+  goalPrompt: string;
+  weeks?: number;
+  profile: IUserFitnessProfile | null;
+  recentWorkouts: Array<{
+    workoutName: string;
+    date: string;
+    exercises: string[];
+  }>;
+  personalRecords: Array<{
+    exerciseName: string;
+    maxWeight: number;
+    bestReps?: number;
+  }>;
+}): Promise<ExerciseRoadmap> {
+  if (!apiKey || !geminiClient) {
+    throw new Error('GEMINI_API_KEY is not configured on the server.');
+  }
+
+  const weeks = params.weeks || 12;
+  const workoutsText =
+    params.recentWorkouts.length > 0
+      ? params.recentWorkouts
+          .map((w) => `- ${w.date}: ${w.workoutName} (${w.exercises.join(', ')})`)
+          .join('\n')
+      : '- No completed workout sessions logged yet.';
+
+  const prsText =
+    params.personalRecords.length > 0
+      ? params.personalRecords
+          .map((p) => `- ${p.exerciseName}: ${p.maxWeight} kg${p.bestReps ? ` × ${p.bestReps}` : ''}`)
+          .join('\n')
+      : '- No personal records logged yet.';
+
+  const basePrompt = `You are FitTrack AI Strength & Conditioning Coach.
+Build a progressive ${weeks}-week Exercise Roadmap tailored ONLY to this user's profile and logged workouts.
+
+User Goal: "${params.goalPrompt}"
+User Profile:
+- Fitness Goal: ${params.profile?.fitnessGoal || 'general_fitness'}
+- Weight: ${params.profile?.weight || 70} kg, Height: ${params.profile?.height || 175} cm, Age: ${params.profile?.age || 'N/A'}
+- Activity Level: ${params.profile?.activityLevel || 'moderate'}
+
+Recent Logged Workouts:
+${workoutsText}
+
+Personal Records:
+${prsText}
+
+Return ONLY valid JSON matching this exact schema (2 to 4 phases covering ${weeks} weeks):
+{
+  "title": "string",
+  "durationWeeks": ${weeks},
+  "goalSummary": "string",
+  "phases": [
+    {
+      "phaseNumber": 1,
+      "title": "Foundation & Technique",
+      "weekRange": "Weeks 1-4",
+      "focus": "string",
+      "weeklyFrequency": 4,
+      "keyExercises": [
+        {
+          "name": "Barbell Bench Press",
+          "sets": 3,
+          "reps": "8-10",
+          "progressionCue": "Add 2.5 kg when all sets hit 10 reps"
+        }
+      ],
+      "milestone": "string"
+    }
+  ]
+}`;
+
+  return withGeminiFallback(async (modelName) => {
+    const model = geminiClient.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        temperature: 0.25,
+        maxOutputTokens: 3000,
+        responseMimeType: 'application/json',
+      },
+    });
+
+    let lastValidationError = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const promptToSend =
+        attempt === 0
+          ? basePrompt
+          : `${basePrompt}\n\nYour previous JSON response failed schema validation with this error: ${lastValidationError}\nFix the JSON so it strictly matches the required schema.`;
+
+      const result = await model.generateContent(promptToSend);
+      const rawText = result.response.text();
+      try {
+        const parsed = JSON.parse(rawText);
+        const validated = exerciseRoadmapSchema.safeParse(parsed);
+        if (validated.success) {
+          return validated.data;
+        }
+        lastValidationError = validated.error.issues
+          .map((i) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ');
+      } catch (err) {
+        lastValidationError = err instanceof Error ? err.message : 'Invalid JSON syntax';
+      }
+    }
+
+    throw new Error(
+      'Unable to build a structured exercise roadmap right now. Please refine your goal and try again.'
+    );
   });
 }

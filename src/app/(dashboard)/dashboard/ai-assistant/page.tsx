@@ -12,6 +12,8 @@ import {
   User as UserIcon,
   Flame,
   Upload,
+  Layers,
+  AlertCircle,
 } from 'lucide-react';
 import { IAIMessage } from '@/types';
 import { useToast } from '@/components/ui/Toast';
@@ -19,7 +21,7 @@ import { invalidateCachePrefix } from '@/lib/client-cache';
 
 export default function AIAssistantPage() {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'chat' | 'builder'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'builder' | 'roadmap'>('chat');
 
   // Chat State
   const [messages, setMessages] = useState<IAIMessage[]>([]);
@@ -37,6 +39,13 @@ export default function AIAssistantPage() {
   const [pdfImportLoading, setPdfImportLoading] = useState(false);
   const [pdfImportError, setPdfImportError] = useState<string | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+
+  // Exercise Roadmap State
+  const [roadmapGoal, setRoadmapGoal] = useState('');
+  const [roadmapWeeks, setRoadmapWeeks] = useState(12);
+  const [roadmapLoading, setRoadmapLoading] = useState(false);
+  const [roadmapError, setRoadmapError] = useState<string | null>(null);
+  const [roadmapData, setRoadmapData] = useState<any | null>(null);
 
   // Load latest conversation
   useEffect(() => {
@@ -185,12 +194,49 @@ export default function AIAssistantPage() {
     }
   };
 
+  const handleGenerateRoadmap = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!roadmapGoal.trim() || roadmapLoading) return;
+
+    try {
+      setRoadmapLoading(true);
+      setRoadmapError(null);
+      const res = await fetch('/api/ai/roadmap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal: roadmapGoal.trim(), weeks: roadmapWeeks }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || 'Unable to generate exercise roadmap.');
+      }
+      setRoadmapData(json.data);
+      toast({
+        title: 'Exercise roadmap ready',
+        description: `${json.data.durationWeeks}-week progression roadmap generated.`,
+        variant: 'success',
+      });
+    } catch (err: any) {
+      const msg = err.message || 'Unable to generate exercise roadmap.';
+      setRoadmapError(msg);
+      toast({ title: 'Roadmap error', description: msg, variant: 'error' });
+    } finally {
+      setRoadmapLoading(false);
+    }
+  };
+
   const handlePdfImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file || pdfImportLoading) return;
 
-    if (file.type !== 'application/pdf' || !file.name.toLowerCase().endsWith('.pdf')) {
-      setPdfImportError('Please select a PDF file.');
+    const isAllowedMime =
+      !file.type ||
+      file.type === 'application/pdf' ||
+      file.type === 'application/x-pdf' ||
+      file.type === 'application/octet-stream';
+
+    if (!isAllowedMime || !file.name.toLowerCase().endsWith('.pdf')) {
+      setPdfImportError('Only PDF files (.pdf) are supported.');
       event.target.value = '';
       return;
     }
@@ -248,6 +294,17 @@ export default function AIAssistantPage() {
           >
             <Sparkles className="w-4 h-4" />
             <span>AI Plan Builder</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('roadmap')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'roadmap'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Exercise Roadmap</span>
           </button>
         </div>
 
@@ -622,6 +679,119 @@ export default function AIAssistantPage() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 3: AI Exercise Roadmap */}
+      {activeTab === 'roadmap' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs">
+            <h2 className="text-lg font-bold text-slate-900">
+              Multi-Phase Exercise Roadmap
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Uses your saved profile and logged workout history to build a validated multi-phase progression roadmap.
+            </p>
+
+            <form onSubmit={handleGenerateRoadmap} className="mt-4 space-y-3">
+              <textarea
+                rows={3}
+                required
+                value={roadmapGoal}
+                onChange={(e) => setRoadmapGoal(e.target.value)}
+                placeholder="e.g. Build upper-body strength and hit a 100kg bench press over 12 weeks while training 4 days per week."
+                className="w-full p-3.5 text-xs sm:text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-semibold text-slate-600">Duration:</label>
+                  <select
+                    value={roadmapWeeks}
+                    onChange={(e) => setRoadmapWeeks(Number(e.target.value))}
+                    className="px-3 py-1.5 text-xs font-semibold border border-slate-200 rounded-lg bg-white"
+                  >
+                    <option value={8}>8 Weeks</option>
+                    <option value={12}>12 Weeks</option>
+                    <option value={16}>16 Weeks</option>
+                  </select>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={roadmapLoading}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition shadow-xs disabled:opacity-50"
+                >
+                  {roadmapLoading ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Layers className="w-4 h-4" />
+                  )}
+                  <span>{roadmapLoading ? 'Building Roadmap...' : 'Generate Exercise Roadmap'}</span>
+                </button>
+              </div>
+            </form>
+
+            {roadmapError && (
+              <div className="mt-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-medium text-rose-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{roadmapError}</span>
+              </div>
+            )}
+          </div>
+
+          {roadmapData && (
+            <div className="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-xs space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-100">
+                <div>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full">
+                    {roadmapData.durationWeeks}-Week Progression
+                  </span>
+                  <h3 className="text-lg font-bold text-slate-900 mt-1.5">{roadmapData.title}</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">{roadmapData.goalSummary}</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {roadmapData.phases?.map((phase: any) => (
+                  <div
+                    key={phase.phaseNumber}
+                    className="p-4 sm:p-5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-md bg-emerald-600 text-white text-xs font-bold">
+                          Phase {phase.phaseNumber}
+                        </span>
+                        <h4 className="text-sm font-bold text-slate-900">{phase.title}</h4>
+                      </div>
+                      <span className="text-xs font-semibold text-slate-500">
+                        {phase.weekRange} • {phase.weeklyFrequency}x / week
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-600">{phase.focus}</p>
+
+                    <div className="divide-y divide-slate-200/70 bg-white rounded-lg border border-slate-200/70 px-3">
+                      {phase.keyExercises?.map((ex: any, idx: number) => (
+                        <div key={idx} className="py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                          <span className="font-semibold text-slate-800">{ex.name}</span>
+                          <span className="text-slate-500">
+                            {ex.sets} sets × {ex.reps} • <span className="text-emerald-700">{ex.progressionCue}</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Milestone: {phase.milestone}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

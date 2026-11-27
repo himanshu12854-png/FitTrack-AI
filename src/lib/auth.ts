@@ -23,7 +23,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         const user = await User.findOne({
           email: (credentials.email as string).toLowerCase().trim(),
-        });
+        })
+          // One small, indexed query is all credential login needs before
+          // bcrypt verification. Do not hydrate unused account fields.
+          .select('_id name email image password')
+          .lean();
 
         if (!user || !user.password) {
           return null;
@@ -47,5 +51,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       },
     }),
   ],
-  secret: process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET || 'fittrack-ai-dev-secret-key-32charsmin!',
+  // Required in every environment. Never ship a fallback secret in source.
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
 });

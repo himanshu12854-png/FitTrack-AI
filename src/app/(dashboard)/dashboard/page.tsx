@@ -18,9 +18,9 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { getCached, setCached } from '@/lib/client-cache';
-import { prefetchAllDashboardData } from '@/lib/prefetch-data';
 import { DashboardSkeleton } from '@/components/ui/Skeleton';
 import CalorieRing from '@/components/ui/CalorieRing';
+import LazySection from '@/components/ui/LazySection';
 
 const WeeklyCalorieChart = dynamic(
   () => import('@/components/charts/WeeklyCalorieChart'),
@@ -89,12 +89,13 @@ export default function DashboardPage() {
     return !cached;
   });
   const [error, setError] = useState<string | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
 
   const fetchDashboard = useCallback(async (hasCache = false) => {
     try {
       if (!hasCache) setLoading(true);
       setError(null);
-      const res = await fetch('/api/dashboard');
+      const res = await fetch('/api/dashboard?view=summary');
       if (!res.ok) throw new Error('Failed to load dashboard data');
       const json = await res.json();
       if (json.success) {
@@ -102,9 +103,15 @@ export default function DashboardPage() {
           router.replace('/dashboard/onboarding');
           return;
         }
-        setCached('dashboard', json.data);
-        setData(json.data);
-        prefetchAllDashboardData();
+        setData((prev) => {
+          const merged = {
+            ...json.data,
+            recentDietHistory: prev?.recentDietHistory,
+            recentActivity: prev?.recentActivity,
+          };
+          setCached('dashboard', merged);
+          return merged;
+        });
       } else {
         throw new Error(json.error || 'Failed to parse response');
       }
@@ -116,6 +123,30 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, [router]);
+
+  const fetchDashboardDetails = useCallback(async () => {
+    try {
+      setDetailsLoading(true);
+      const res = await fetch('/api/dashboard?view=details');
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.success && json.data) {
+        setData((prev) => {
+          if (!prev) return prev;
+          const merged = {
+            ...prev,
+            recentDietHistory: json.data.recentDietHistory,
+            recentActivity: json.data.recentActivity,
+          };
+          setCached('dashboard', merged);
+          return merged;
+        });
+      }
+    } catch {
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const cached = getCached<DashboardStats>('dashboard', 30000);
@@ -511,7 +542,16 @@ export default function DashboardPage() {
         </div>
       </motion.div>
 
-      {/* Charts & Activity Section */}
+      {/* Charts & Activity Section (Lazy-loaded on viewport entry) */}
+      <LazySection
+        onVisible={fetchDashboardDetails}
+        fallback={
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 sm:gap-6">
+            <div className="lg:col-span-2 h-80 bg-white rounded-2xl p-6 border border-slate-200/80 animate-pulse" />
+            <div className="h-80 bg-white rounded-2xl p-6 border border-slate-200/80 animate-pulse" />
+          </div>
+        }
+      >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 sm:gap-6">
         {/* Weekly Calorie Intake Bar Chart */}
         <motion.div
@@ -532,7 +572,9 @@ export default function DashboardPage() {
           </div>
 
           <div className="h-64 w-full">
-            {data.recentDietHistory && data.recentDietHistory.length > 0 ? (
+            {detailsLoading && !data.recentDietHistory ? (
+              <div className="h-full w-full rounded-xl bg-slate-100 animate-pulse" />
+            ) : data.recentDietHistory && data.recentDietHistory.length > 0 ? (
               <WeeklyCalorieChart data={data.recentDietHistory} />
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-center text-slate-400">
@@ -554,7 +596,13 @@ export default function DashboardPage() {
         >
           <h2 className="text-base font-bold text-slate-900 mb-4">Recent Activity</h2>
 
-          {data.recentActivity && data.recentActivity.length > 0 ? (
+          {detailsLoading && !data.recentActivity ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((n) => (
+                <div key={n} className="h-12 rounded-xl bg-slate-100 animate-pulse" />
+              ))}
+            </div>
+          ) : data.recentActivity && data.recentActivity.length > 0 ? (
             <div className="space-y-4">
               {data.recentActivity.map((activity) => (
                 <div key={activity.id} className="flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0">
@@ -592,6 +640,7 @@ export default function DashboardPage() {
           )}
         </motion.div>
       </div>
+      </LazySection>
     </div>
   );
 }

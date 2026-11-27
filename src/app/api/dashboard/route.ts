@@ -10,28 +10,77 @@ import { getTodayDate, getWeekStart, getDayName } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const sessionUser = await requireAuth();
+    const { searchParams } = new URL(req.url);
+    const view = searchParams.get('view') || 'summary'; // 'summary' | 'details' | 'full'
+
     await connectDB();
 
-    const [user, profile, activePlan, recentDietHistory, recentSessions] = await Promise.all([
-      User.findById(sessionUser.id).select('name email image').lean(),
+    if (view === 'details') {
+      const [recentDietHistory, recentSessions] = await Promise.all([
+        DietLog.find({ userId: sessionUser.id })
+          .select('date totalCalories totalProtein totalCarbs totalFats')
+          .sort({ date: -1 })
+          .limit(7)
+          .lean(),
+        WorkoutSession.find({ userId: sessionUser.id, isCompleted: true })
+          .select('workoutName date exercises.exerciseName')
+          .sort({ date: -1 })
+          .limit(3)
+          .lean(),
+      ]);
+
+      const recentActivity: Array<{
+        id: string;
+        type: 'diet' | 'workout';
+        title: string;
+        subtitle: string;
+        date: string;
+      }> = [];
+
+      recentSessions.forEach((s: any) => {
+        recentActivity.push({
+          id: s._id.toString(),
+          type: 'workout',
+          title: `Completed ${s.workoutName}`,
+          subtitle: `${s.exercises?.length || 0} exercises completed`,
+          date: new Date(s.date).toISOString().split('T')[0],
+        });
+      });
+
+      recentDietHistory
+        .filter((d: any) => d.totalCalories > 0)
+        .slice(0, 3)
+        .forEach((d: any) => {
+          recentActivity.push({
+            id: d._id.toString(),
+            type: 'diet',
+            title: `Logged ${d.totalCalories} kcal`,
+            subtitle: `P: ${d.totalProtein}g | C: ${d.totalCarbs}g | F: ${d.totalFats}g`,
+            date: d.date,
+          });
+        });
+
+      recentActivity.sort((a, b) => (b.date > a.date ? 1 : -1));
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          recentDietHistory: recentDietHistory.reverse(),
+          recentActivity: recentActivity.slice(0, 5),
+        },
+      });
+    }
+
+    const [user, profile, activePlan] = await Promise.all([
+      User.findById(sessionUser.id).select('name email').lean(),
       UserFitnessProfile.findOne({ userId: sessionUser.id })
         .select('timezone dailyCalorieTarget proteinTarget carbsTarget fatsTarget fitnessGoal isOnboarded age height weight')
         .lean(),
       WorkoutPlan.findOne({ userId: sessionUser.id, isActive: true })
-        .select('name days')
-        .lean(),
-      DietLog.find({ userId: sessionUser.id })
-        .select('date totalCalories totalProtein totalCarbs totalFats')
-        .sort({ date: -1 })
-        .limit(7)
-        .lean(),
-      WorkoutSession.find({ userId: sessionUser.id, isCompleted: true })
-        .select('workoutName date exercises')
-        .sort({ date: -1 })
-        .limit(3)
+        .select('name days.dayName days.name days.isRestDay')
         .lean(),
     ]);
 
@@ -46,7 +95,10 @@ export async function GET() {
     const endOfDay = new Date(todayStr);
     endOfDay.setUTCHours(23, 59, 59, 999);
 
-    const [todaySession, weeklyCompletedCount] = await Promise.all([
+    const [todayDietDoc, todaySession, weeklyCompletedCount] = await Promise.all([
+      DietLog.findOne({ userId: sessionUser.id, date: todayStr })
+        .select('totalCalories totalProtein totalCarbs totalFats')
+        .lean(),
       WorkoutSession.findOne({
         userId: sessionUser.id,
         date: { $gte: startOfDay, $lte: endOfDay },
@@ -60,8 +112,7 @@ export async function GET() {
       }),
     ]);
 
-    const rawDiet = recentDietHistory.find((d: any) => d.date === todayStr);
-    const todayDiet = rawDiet || {
+    const todayDiet = todayDietDoc || {
       totalCalories: 0,
       totalProtein: 0,
       totalCarbs: 0,
@@ -84,8 +135,73 @@ export async function GET() {
       ? activePlan.days.filter((d: any) => !d.isRestDay).length
       : 4;
 
-    // Derive recent foods from recentDietHistory instead of an extra DB query
-    const recentFoods = recentDietHistory.filter((d: any) => d.totalCalories > 0).slice(0, 3);
+    const calorieTarget = profile?.dailyCalorieTarget || 2000;
+    const consumedCalories = todayDiet.totalCalories || 0;
+    const remainingCalories = Math.max(0, calorieTarget - consumedCalories);
+    const isOnboarded =
+      profile?.isOnboarded === true ||
+      (profile?.isOnboarded !== false &&
+        Boolean(profile?.age && profile?.height && profile?.weight));
+
+    const summaryPayload = {
+      user: {
+        name: user?.name || 'Athlete',
+        email: user?.email || '',
+      },
+      isOnboarded,
+      fitnessGoal: profile?.fitnessGoal || 'build_muscle',
+      calories: {
+        consumed: consumedCalories,
+        target: calorieTarget,
+        remaining: remainingCalories,
+      },
+      macros: {
+        protein: {
+          consumed: todayDiet.totalProtein || 0,
+          target: profile?.proteinTarget || 150,
+        },
+        carbs: {
+          consumed: todayDiet.totalCarbs || 0,
+          target: profile?.carbsTarget || 250,
+        },
+        fats: {
+          consumed: todayDiet.totalFats || 0,
+          target: profile?.fatsTarget || 65,
+        },
+      },
+      workout: {
+        todayWorkout:
+          todaySession?.workoutName ||
+          todayScheduledWorkout?.name ||
+          (todayScheduledWorkout?.isRestDay ? 'Rest Day' : 'No Scheduled Routine'),
+        isRestDay: todayScheduledWorkout?.isRestDay || false,
+        isCompleted: todaySession?.isCompleted || false,
+        dayOfWeek,
+        weeklyCompleted: weeklyCompletedCount,
+        weeklyTarget: weeklyTargetCount,
+        activePlanName: activePlan?.name || null,
+      },
+    };
+
+    if (view !== 'full') {
+      return NextResponse.json({
+        success: true,
+        data: summaryPayload,
+      });
+    }
+
+    const [recentDietHistory, recentSessions] = await Promise.all([
+      DietLog.find({ userId: sessionUser.id })
+        .select('date totalCalories totalProtein totalCarbs totalFats')
+        .sort({ date: -1 })
+        .limit(7)
+        .lean(),
+      WorkoutSession.find({ userId: sessionUser.id, isCompleted: true })
+        .select('workoutName date exercises.exerciseName')
+        .sort({ date: -1 })
+        .limit(3)
+        .lean(),
+    ]);
 
     const recentActivity: Array<{
       id: string;
@@ -105,63 +221,25 @@ export async function GET() {
       });
     });
 
-    recentFoods.forEach((d: any) => {
-      recentActivity.push({
-        id: d._id.toString(),
-        type: 'diet',
-        title: `Logged ${d.totalCalories} kcal`,
-        subtitle: `P: ${d.totalProtein}g | C: ${d.totalCarbs}g | F: ${d.totalFats}g`,
-        date: d.date,
+    recentDietHistory
+      .filter((d: any) => d.totalCalories > 0)
+      .slice(0, 3)
+      .forEach((d: any) => {
+        recentActivity.push({
+          id: d._id.toString(),
+          type: 'diet',
+          title: `Logged ${d.totalCalories} kcal`,
+          subtitle: `P: ${d.totalProtein}g | C: ${d.totalCarbs}g | F: ${d.totalFats}g`,
+          date: d.date,
+        });
       });
-    });
 
     recentActivity.sort((a, b) => (b.date > a.date ? 1 : -1));
-
-    const calorieTarget = profile?.dailyCalorieTarget || 2000;
-    const consumedCalories = todayDiet.totalCalories || 0;
-    const remainingCalories = Math.max(0, calorieTarget - consumedCalories);
-    const isOnboarded =
-      profile?.isOnboarded === true ||
-      (profile?.isOnboarded !== false &&
-        Boolean(profile?.age && profile?.height && profile?.weight));
 
     return NextResponse.json({
       success: true,
       data: {
-        user: {
-          name: user?.name || 'Athlete',
-          email: user?.email || '',
-        },
-        isOnboarded,
-        fitnessGoal: profile?.fitnessGoal || 'build_muscle',
-        calories: {
-          consumed: consumedCalories,
-          target: calorieTarget,
-          remaining: remainingCalories,
-        },
-        macros: {
-          protein: {
-            consumed: todayDiet.totalProtein || 0,
-            target: profile?.proteinTarget || 150,
-          },
-          carbs: {
-            consumed: todayDiet.totalCarbs || 0,
-            target: profile?.carbsTarget || 250,
-          },
-          fats: {
-            consumed: todayDiet.totalFats || 0,
-            target: profile?.fatsTarget || 65,
-          },
-        },
-        workout: {
-          todayWorkout: todaySession?.workoutName || todayScheduledWorkout?.name || (todayScheduledWorkout?.isRestDay ? 'Rest Day' : 'No Scheduled Routine'),
-          isRestDay: todayScheduledWorkout?.isRestDay || false,
-          isCompleted: todaySession?.isCompleted || false,
-          dayOfWeek,
-          weeklyCompleted: weeklyCompletedCount,
-          weeklyTarget: weeklyTargetCount,
-          activePlanName: activePlan?.name || null,
-        },
+        ...summaryPayload,
         recentDietHistory: recentDietHistory.reverse(),
         recentActivity: recentActivity.slice(0, 5),
       },
